@@ -644,3 +644,183 @@ describe('edge cases', () => {
     assert.ok(s2.events.length > s1.events.length);
   });
 });
+
+// ---------------------------------------------------------------------------
+// processTurn — targetPhase parameter
+// ---------------------------------------------------------------------------
+
+describe('processTurn targetPhase', () => {
+
+  // ── No targetPhase: default "full cycle" behaviour ───────────────────────
+
+  it('no target, turn 1 dumb_animals → returns turn 2 dumb_animals', () => {
+    const s0 = makeState(); // phase: dumb_animals, turn: 1
+    const s = processTurn(s0, { type: 'end_turn' });
+    assert.equal(s.turn, 2);
+    assert.equal(s.phase, 'dumb_animals');
+  });
+
+  it('no target, turn 1 come_by → returns turn 2 come_by', () => {
+    let s0 = makeState();
+    // Advance to come_by without a target
+    s0 = processTurn(s0, { type: 'end_turn' }, 'come_by');
+    assert.equal(s0.turn, 1);
+    assert.equal(s0.phase, 'come_by');
+
+    // Now run with no target: should complete phase 2→3→4 of turn 1,
+    // then phase 1 of turn 2, and stop just before phase 2 of turn 2.
+    const s = processTurn(s0, { type: 'end_turn' });
+    assert.equal(s.turn, 2);
+    assert.equal(s.phase, 'come_by');
+  });
+
+  it('no target, turn 1 loose_animal → returns turn 2 loose_animal', () => {
+    let s0 = makeState();
+    s0 = processTurn(s0, { type: 'end_turn' }, 'loose_animal');
+    assert.equal(s0.phase, 'loose_animal');
+
+    const s = processTurn(s0, { type: 'end_turn' });
+    assert.equal(s.turn, 2);
+    assert.equal(s.phase, 'loose_animal');
+  });
+
+  it('no target, turn 1 move_herd → returns turn 2 move_herd', () => {
+    let s0 = makeState();
+    s0 = processTurn(s0, { type: 'end_turn' }, 'move_herd');
+    assert.equal(s0.phase, 'move_herd');
+
+    const s = processTurn(s0, { type: 'end_turn' });
+    assert.equal(s.turn, 2);
+    assert.equal(s.phase, 'move_herd');
+  });
+
+  // ── targetPhase: stop before the named phase ─────────────────────────────
+
+  it('turn 1 dumb_animals → target come_by: runs only phase 1, stops at come_by', () => {
+    const s0 = makeState(); // turn 1, dumb_animals
+    const s = processTurn(s0, { type: 'end_turn' }, 'come_by');
+    assert.equal(s.turn, 1);
+    assert.equal(s.phase, 'come_by');
+    // Only dumb_animals ran — events should be short
+    assert.ok(s.events.some(e => e.includes('Dumb Animals')));
+    assert.ok(!s.events.some(e => e.includes('Come-by')));
+  });
+
+  it('turn 1 dumb_animals → target loose_animal: runs phases 1+2', () => {
+    const s0 = makeState();
+    const s = processTurn(s0, { type: 'end_turn' }, 'loose_animal');
+    assert.equal(s.turn, 1);
+    assert.equal(s.phase, 'loose_animal');
+    assert.ok(s.events.some(e => e.includes('Dumb Animals')));
+    assert.ok(s.events.some(e => e.includes('Come-by')));
+    assert.ok(!s.events.some(e => e.includes('Loose Animal')));
+  });
+
+  it('turn 1 dumb_animals → target move_herd: runs phases 1+2+3', () => {
+    const s0 = makeState();
+    const s = processTurn(s0, { type: 'end_turn' }, 'move_herd');
+    assert.equal(s.turn, 1);
+    assert.equal(s.phase, 'move_herd');
+    assert.ok(s.events.some(e => e.includes('Loose Animal')));
+    assert.ok(!s.events.some(e => e.includes('Move Herd')));
+  });
+
+  it('turn 1 dumb_animals → target dumb_animals: completes full turn, returns turn 2 dumb_animals', () => {
+    const s0 = makeState();
+    const s = processTurn(s0, { type: 'end_turn' }, 'dumb_animals');
+    assert.equal(s.turn, 2);
+    assert.equal(s.phase, 'dumb_animals');
+  });
+
+  // ── targetPhase == current phase: must advance past it first ─────────────
+
+  it('turn 1 come_by → target come_by: runs phases 2-3-4 + turn2 phase1, returns turn 2 come_by', () => {
+    // Start at come_by
+    let s0 = makeState();
+    s0 = processTurn(s0, { type: 'end_turn' }, 'come_by');
+    assert.equal(s0.turn, 1);
+    assert.equal(s0.phase, 'come_by');
+
+    const s = processTurn(s0, { type: 'end_turn' }, 'come_by');
+    assert.equal(s.turn, 2);
+    assert.equal(s.phase, 'come_by');
+  });
+
+  it('turn 1 loose_animal → target loose_animal: runs phases 3-4 + turn2 phases 1-2, returns turn 2 loose_animal', () => {
+    let s0 = makeState();
+    s0 = processTurn(s0, { type: 'end_turn' }, 'loose_animal');
+    assert.equal(s0.turn, 1);
+    assert.equal(s0.phase, 'loose_animal');
+
+    const s = processTurn(s0, { type: 'end_turn' }, 'loose_animal');
+    assert.equal(s.turn, 2);
+    assert.equal(s.phase, 'loose_animal');
+  });
+
+  it('turn 1 move_herd → target move_herd: runs phase 4 + turn2 phases 1-2-3, returns turn 2 move_herd', () => {
+    let s0 = makeState();
+    s0 = processTurn(s0, { type: 'end_turn' }, 'move_herd');
+    assert.equal(s0.turn, 1);
+    assert.equal(s0.phase, 'move_herd');
+
+    const s = processTurn(s0, { type: 'end_turn' }, 'move_herd');
+    assert.equal(s.turn, 2);
+    assert.equal(s.phase, 'move_herd');
+  });
+
+  // ── come_by action is applied on each pass through that phase ─────────────
+
+  it('action is applied when come_by runs within a targetPhase call', () => {
+    // Place herd far from the dog's movement path so it doesn't block
+    // Dog at (1,12), herd at (1,1) (far north, out of path), moving dog east to (12,12)
+    const s0 = makeState({ dog: { x: 1, y: 12 }, herd: { x: 1, y: 1 } });
+    // Target loose_animal: dumb_animals + come_by will run
+    // Move dog east 11" — path goes right along y=12, herd stays near (1,1) after dumb_animals
+    const s = processTurn(s0, { type: 'move_dog', x: 12, y: 12 }, 'loose_animal');
+    assert.equal(s.phase, 'loose_animal');
+    // Dog should have moved to approximately (12, 12) — herd is far north so path is clear
+    assert.ok(Math.abs(s.dog.x - 12) < 1.0, `dog.x=${s.dog.x}`);
+    assert.ok(Math.abs(s.dog.y - 12) < 1.0, `dog.y=${s.dog.y}`);
+  });
+
+  // ── early exit on finished ─────────────────────────────────────────────────
+
+  it('stops early and returns finished state if game ends mid-loop', () => {
+    // Start directly at move_herd with herd already at pen so win triggers immediately
+    const s0 = makeState({
+      dog:  { x: 12, y: 12 },
+      herd: { x: 22, y: 22 },
+      pen:  { x: 22, y: 22 },
+    });
+    s0.phase = 'move_herd';
+    // Target dumb_animals on turn 2 — but game should end during move_herd of turn 1
+    const s = processTurn(s0, { type: 'end_turn' }, 'dumb_animals');
+    assert.equal(s.phase, 'finished');
+  });
+
+  // ── chaining: step-by-step through all four phases ────────────────────────
+
+  it('chaining targetPhase steps produces same final state as a full processTurn', () => {
+    const rng = fixedRng(0.5);
+    const base = makeState({ rng });
+
+    // Step-by-step
+    let stepped = makeState({ rng: fixedRng(0.5) });
+    stepped = processTurn(stepped, { type: 'end_turn' }, 'come_by');      // after dumb_animals
+    stepped = processTurn(stepped, { type: 'end_turn' }, 'loose_animal'); // after come_by
+    stepped = processTurn(stepped, { type: 'end_turn' }, 'move_herd');    // after loose_animal
+    stepped = processTurn(stepped, { type: 'end_turn' }, 'dumb_animals'); // after move_herd
+
+    // Full single call
+    const full = processTurn(makeState({ rng: fixedRng(0.5) }), { type: 'end_turn' });
+
+    // Both should be at turn 2 / dumb_animals with same positions
+    assert.equal(stepped.turn,     full.turn);
+    assert.equal(stepped.phase,    full.phase);
+    assert.ok(Math.abs(stepped.herd.x - full.herd.x) < 0.01);
+    assert.ok(Math.abs(stepped.herd.y - full.herd.y) < 0.01);
+    assert.ok(Math.abs(stepped.dog.x  - full.dog.x)  < 0.01);
+    assert.ok(Math.abs(stepped.dog.y  - full.dog.y)  < 0.01);
+  });
+
+});

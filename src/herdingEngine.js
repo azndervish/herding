@@ -557,21 +557,77 @@ export function phaseMoveHerd(state) {
 // ---------------------------------------------------------------------------
 
 /**
- * processTurn(state, action) → nextState
- *
- * Runs all four phases of a turn in sequence:
- *   1. Dumb Animals  (automatic)
- *   2. Come-by       (applies player action)
- *   3. Loose Animal  (automatic)
- *   4. Move Herd     (automatic)
- *
- * The returned state has phase set to 'dumb_animals' (next turn) or 'finished'.
+ * Phase execution order and their runner functions.
+ * Each runner receives (state, action?) and returns the next state with
+ * `phase` already set to the *following* phase (or 'dumb_animals' for the
+ * next turn after move_herd).
  */
-export function processTurn(state, action) {
+const PHASE_ORDER = ['dumb_animals', 'come_by', 'loose_animal', 'move_herd'];
+
+const PHASE_RUNNERS = {
+  dumb_animals: (s, _action) => phaseDumbAnimals(s),
+  come_by:      (s,  action) => phaseComeBy(s, action),
+  loose_animal: (s, _action) => phaseLooseAnimal(s),
+  move_herd:    (s, _action) => phaseMoveHerd(s),
+};
+
+/**
+ * processTurn(state, action, targetPhase?) → nextState
+ *
+ * Runs phases starting from state.phase, advancing until the state's phase
+ * equals targetPhase (without running that phase), then returns.
+ *
+ * --- targetPhase not provided (default behaviour) ---
+ * The target defaults to the *current* phase, meaning "run a full cycle and
+ * stop just before this same phase runs again on the next turn."
+ *
+ *   Turn 1 / dumb_animals  →  runs phases 1-2-3-4, returns at turn 2 / dumb_animals
+ *   Turn 1 / come_by       →  runs phases 2-3-4, then turn-2 phase 1,
+ *                              returns at turn 2 / come_by
+ *
+ * --- targetPhase provided ---
+ * Run phases until the state arrives *at* targetPhase. If we are already AT
+ * the target, we must advance past it first (complete the remainder of this
+ * turn plus the next turn's phases up to the target).
+ *
+ *   Turn 1 / dumb_animals, target come_by  →  runs phase 1 only,
+ *                                              returns at turn 1 / come_by
+ *   Turn 1 / come_by, target come_by       →  runs phases 2-3-4 + turn-2 phase 1,
+ *                                              returns at turn 2 / come_by
+ *
+ * `action` is forwarded to the come_by phase runner whenever it executes.
+ * The game halts early and returns if `phase` becomes 'finished'.
+ */
+export function processTurn(state, action, targetPhase) {
+  // Resolve the stop-before phase.
+  // If no targetPhase given, stop before the current phase (full-cycle default).
+  const stopBefore = targetPhase ?? state.phase;
+
   let s = state;
-  s = phaseDumbAnimals(s);
-  s = phaseComeBy(s, action);
-  s = phaseLooseAnimal(s);
-  s = phaseMoveHerd(s);
-  return s;
+
+  // Safety valve: never loop more than 2 full turns worth of phases (8 steps).
+  const MAX_STEPS = PHASE_ORDER.length * 2 + 1;
+  let steps = 0;
+
+  while (steps < MAX_STEPS) {
+    // Halt immediately if the game ended.
+    if (s.phase === 'finished') return s;
+
+    // If we've already run at least one phase AND the current phase equals
+    // stopBefore, we've arrived — stop before running it.
+    if (steps > 0 && s.phase === stopBefore) return s;
+
+    const runner = PHASE_RUNNERS[s.phase];
+    if (!runner) {
+      throw new Error(`No runner for phase: ${s.phase}`);
+    }
+
+    s = runner(s, action);
+    steps++;
+  }
+
+  // Should never reach here for valid states.
+  throw new Error(`processTurn exceeded ${MAX_STEPS} steps — possible infinite loop.`);
 }
+
+export { PHASE_ORDER, PHASE_RUNNERS };
