@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useEffect } from "react";
+import { useState, useCallback, useRef, useEffect, useLayoutEffect } from "react";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ENGINE (inlined)
@@ -43,10 +43,48 @@ function cloneState(s) {
   };
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// DEBUG HELPERS
+// ─────────────────────────────────────────────────────────────────────────────
+
+function _pos(e) {
+  return `(${e.x.toFixed(2)}, ${e.y.toFixed(2)}) r=${e.radius}`;
+}
+
+/** Returns an array of human-readable boundary violations for entity e. */
+function _oobViolations(e, boardSize) {
+  const v = [];
+  if (e.x - e.radius < 0)         v.push(`left  | x=${e.x.toFixed(2)} < ${e.radius}`);
+  if (e.y - e.radius < 0)         v.push(`top   | y=${e.y.toFixed(2)} < ${e.radius}`);
+  if (e.x + e.radius > boardSize) v.push(`right | x=${e.x.toFixed(2)} > ${(boardSize - e.radius).toFixed(2)}`);
+  if (e.y + e.radius > boardSize) v.push(`bot   | y=${e.y.toFixed(2)} > ${(boardSize - e.radius).toFixed(2)}`);
+  return v;
+}
+
+/** Logs a warn line for every boundary violation on a single entity. */
+function _checkOob(tag, e, boardSize) {
+  _oobViolations(e, boardSize).forEach(msg =>
+    console.warn(`[OOB] ${tag} "${e.id}" — ${msg}`)
+  );
+}
+
+/** Checks every entity in state for boundary violations. */
+function _checkStateOob(tag, s) {
+  _checkOob(tag, s.herd, s.boardSize);
+  _checkOob(tag, s.dog,  s.boardSize);
+  s.looseAnimals.forEach(la => _checkOob(tag, la, s.boardSize));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 function phaseDumbAnimals(state) {
   const s = cloneState(state);
   const { rng, boardSize } = s;
   const events = [];
+
+  console.log(`[dumbAnimals T${s.turn}] entry — herd ${_pos(s.herd)}, dog ${_pos(s.dog)}, loose: ${s.looseAnimals.length}`);
+  _checkStateOob('dumbAnimals:entry', s);
+
   const animals = [s.herd, ...s.looseAnimals].sort(
     (a, b) => dist(b, s.dog) - dist(a, s.dog)
   );
@@ -55,24 +93,44 @@ function phaseDumbAnimals(state) {
     const angle = rng() * 360;
     const { dx, dy } = angleToOffset(angle, roll);
     if (animal.type === 'herd') {
+      const _hBefore = { x: s.herd.x, y: s.herd.y };
       s.herd.x += dx; s.herd.y += dy;
+      console.log(`[dumbAnimals T${s.turn}] herd: roll=${roll} angle=${angle.toFixed(0)}° | (${_hBefore.x.toFixed(2)},${_hBefore.y.toFixed(2)}) → ${_pos(s.herd)}`);
       events.push(`Dumb Animals: Herd wanders ${roll}" (${angle.toFixed(0)}°).`);
+      if (touchesEdge(s.herd, boardSize)) {
+        console.warn(`[dumbAnimals T${s.turn}] herd OOB at ${_pos(s.herd)} — clamping to board`);
+        s.herd.x = Math.max(s.herd.radius, Math.min(boardSize - s.herd.radius, s.herd.x));
+        s.herd.y = Math.max(s.herd.radius, Math.min(boardSize - s.herd.radius, s.herd.y));
+        s.escapedCount = (s.escapedCount || 0) + 1;
+        events.push(`Dumb Animals: Herd hit the board edge! +1 escape (${s.escapedCount} total).`);
+      }
     } else {
       const la = s.looseAnimals.find(a => a.id === animal.id);
       if (la) {
+        const _laBefore = { x: la.x, y: la.y };
         la.x += dx; la.y += dy;
+        console.log(`[dumbAnimals T${s.turn}] ${la.id}: roll=${roll} angle=${angle.toFixed(0)}° | (${_laBefore.x.toFixed(2)},${_laBefore.y.toFixed(2)}) → ${_pos(la)}`);
         events.push(`Dumb Animals: ${la.id} wanders ${roll}".`);
-        if (touchesEdge(la, boardSize)) { la._escaped = true; events.push(`${la.id} reached the edge and escaped!`); }
+        if (touchesEdge(la, boardSize)) {
+          console.warn(`[dumbAnimals T${s.turn}] ${la.id} OOB at ${_pos(la)} — marking escaped`);
+          la._escaped = true; events.push(`${la.id} reached the edge and escaped!`);
+        }
       }
     }
   }
   const rejoined = [];
   for (const la of s.looseAnimals) {
-    if (!la._escaped && entitiesContact(la, s.herd)) { rejoined.push(la.id); events.push(`${la.id} rejoined the herd!`); }
+    if (!la._escaped && entitiesContact(la, s.herd)) {
+      console.log(`[dumbAnimals T${s.turn}] ${la.id} rejoined herd (dist=${dist(la, s.herd).toFixed(2)}")`);
+      rejoined.push(la.id); events.push(`${la.id} rejoined the herd!`);
+    }
   }
   s.looseAnimals = s.looseAnimals.filter(a => !rejoined.includes(a.id) && !a._escaped);
   s.events = [...s.events, ...events];
   s.phase = 'come_by';
+
+  console.log(`[dumbAnimals T${s.turn}] exit  — herd ${_pos(s.herd)}, loose: ${s.looseAnimals.length}, escaped: ${s.escapedCount || 0}`);
+  _checkStateOob('dumbAnimals:exit', s);
   return s;
 }
 
@@ -92,13 +150,19 @@ function rayCircleIntersect(from, to, obstacle) {
 function phaseComeBy(state, action) {
   const s = cloneState(state);
   const events = [];
+
+  console.log(`[comeBy T${s.turn}] entry — dog ${_pos(s.dog)}, action=${JSON.stringify(action)}`);
+  _checkStateOob('comeBy:entry', s);
+
   if (!action || action.type === 'end_turn') {
+    console.log(`[comeBy T${s.turn}] dog holds position`);
     events.push('Come-by: Dog holds position.');
     s.events = [...s.events, ...events]; s.phase = 'loose_animal'; return s;
   }
   if (action.type !== 'move_dog') throw new Error(`Unknown action: ${action.type}`);
   const target = { x: action.x, y: action.y };
   const distance = dist(s.dog, target);
+  console.log(`[comeBy T${s.turn}] target=(${target.x.toFixed(2)},${target.y.toFixed(2)}) dist=${distance.toFixed(2)}"${distance > DOG_MOVE_MAX ? ' ⚠ EXCEEDS MAX' : ''}`);
   if (distance > DOG_MOVE_MAX + 1e-9) throw new Error(`Move exceeds max ${DOG_MOVE_MAX}".`);
   const obstacles = [s.herd, ...s.looseAnimals];
   let closestBlock = Infinity, blockedEntity = null;
@@ -110,11 +174,14 @@ function phaseComeBy(state, action) {
     const dir = unitVector(s.dog, target);
     const stopDist = Math.max(0, closestBlock - (s.dog.radius + blockedEntity.radius) - 0.01);
     s.dog.x += dir.x * stopDist; s.dog.y += dir.y * stopDist;
+    console.log(`[comeBy T${s.turn}] dog blocked by ${blockedEntity.id} at dist=${closestBlock.toFixed(2)}", stopped at ${_pos(s.dog)}`);
     events.push(`Come-by: Dog blocked by ${blockedEntity.id}, stopped at (${s.dog.x.toFixed(1)}, ${s.dog.y.toFixed(1)}).`);
   } else {
     s.dog.x = target.x; s.dog.y = target.y;
+    console.log(`[comeBy T${s.turn}] dog moved to ${_pos(s.dog)}`);
     events.push(`Come-by: Dog moves to (${s.dog.x.toFixed(1)}, ${s.dog.y.toFixed(1)}).`);
   }
+  _checkOob('comeBy:exit | dog', s.dog, s.boardSize);
   s.events = [...s.events, ...events]; s.phase = 'loose_animal'; return s;
 }
 
@@ -122,9 +189,14 @@ function phaseLooseAnimal(state) {
   const s = cloneState(state);
   const { rng } = s;
   const events = [];
+
   const dogToHerd = dist(s.dog, s.herd);
+  console.log(`[looseAnimal T${s.turn}] entry — dog ${_pos(s.dog)}, herd ${_pos(s.herd)}, dog↔herd=${dogToHerd.toFixed(2)}"`);
+  _checkStateOob('looseAnimal:entry', s);
+
   if (dogToHerd <= DOG_SPOOK_RANGE) {
     const roll = rollDie(8, rng);
+    console.log(`[looseAnimal T${s.turn}] within spook range — D8 roll: ${roll} vs distance ${dogToHerd.toFixed(2)}"`);
     events.push(`Loose Animal: Dog ${dogToHerd.toFixed(1)}" from herd. Rolled D8: ${roll}.`);
     if (roll >= dogToHerd) {
       const spawnDist = rollDie(6, rng);
@@ -132,6 +204,8 @@ function phaseLooseAnimal(state) {
       const { dx, dy } = angleToOffset(angle, spawnDist);
       const newId = `loose_${s.looseAnimals.length + 1}_t${s.turn}`;
       const la = { id: newId, type: 'loose', radius: TOKEN_RADIUS, x: s.herd.x + dx, y: s.herd.y + dy };
+      console.log(`[looseAnimal T${s.turn}] spawned ${newId} — ${spawnDist}" @ ${angle.toFixed(0)}° → ${_pos(la)}`);
+      _checkOob(`looseAnimal:spawn | ${newId}`, la, s.boardSize);
       s.looseAnimals.push(la);
       events.push(`Loose Animal: Animal spooked! ${newId} placed ${spawnDist}" from herd.`);
     } else {
@@ -140,26 +214,38 @@ function phaseLooseAnimal(state) {
   } else {
     events.push(`Loose Animal: Dog ${dogToHerd.toFixed(1)}" away — too far to spook.`);
   }
-  s.events = [...s.events, ...events]; s.phase = 'move_herd'; return s;
+  s.events = [...s.events, ...events]; s.phase = 'move_herd';
+
+  _checkStateOob('looseAnimal:exit', s);
+  return s;
 }
 
 function phaseMoveHerd(state) {
   const s = cloneState(state);
   const { boardSize } = s;
   const events = [];
+
+  console.log(`[moveHerd T${s.turn}] entry — herd ${_pos(s.herd)}, dog ${_pos(s.dog)}, loose: ${s.looseAnimals.length}`);
+  _checkStateOob('moveHerd:entry', s);
+
   const animals = [s.herd, ...s.looseAnimals].sort((a,b) => dist(b,s.dog) - dist(a,s.dog));
   const escapedIds = new Set();
 
   for (const animal of animals) {
     if (escapedIds.has(animal.id)) continue;
     const d = dist(animal, s.dog);
-    if (d >= HERD_CLEARANCE) continue;
+    if (d >= HERD_CLEARANCE) {
+      console.log(`[moveHerd T${s.turn}] ${animal.id} already ${d.toFixed(2)}" from dog — no push needed`);
+      continue;
+    }
     const needed = HERD_CLEARANCE - d;
     const dir = unitVector(s.dog, animal);
     let newX = animal.x + dir.x * needed, newY = animal.y + dir.y * needed;
+    console.log(`[moveHerd T${s.turn}] ${animal.id}: dist=${d.toFixed(2)}", pushing ${needed.toFixed(2)}" → (${newX.toFixed(2)},${newY.toFixed(2)})`);
     const wouldEscape = newX < animal.radius || newY < animal.radius ||
                         newX > boardSize - animal.radius || newY > boardSize - animal.radius;
     if (wouldEscape) {
+      console.warn(`[moveHerd T${s.turn}] ${animal.id} would escape at (${newX.toFixed(2)},${newY.toFixed(2)}) — clamping`);
       newX = Math.max(animal.radius, Math.min(boardSize - animal.radius, newX));
       newY = Math.max(animal.radius, Math.min(boardSize - animal.radius, newY));
       if (animal.type === 'herd') {
@@ -180,6 +266,7 @@ function phaseMoveHerd(state) {
       if (entitiesContact(testPos, other)) {
         const stopDist = Math.max(0, dist(animal, other) - animal.radius - other.radius - 0.01);
         newX = animal.x + dir.x * stopDist; newY = animal.y + dir.y * stopDist;
+        console.log(`[moveHerd T${s.turn}] ${animal.id} blocked by ${other.id}, stopping at (${newX.toFixed(2)},${newY.toFixed(2)})`);
         events.push(`Move Herd: ${animal.id} stopped — contact with ${other.id}.`);
         blocked = true; break;
       }
@@ -193,7 +280,10 @@ function phaseMoveHerd(state) {
       const la = s.looseAnimals.find(a => a.id === animal.id);
       const contactsHerd = la && (entitiesContact(la, s.herd) ||
         (blocked && dist({ x: newX, y: newY }, s.herd) <= la.radius + s.herd.radius + 0.05));
-      if (contactsHerd) { escapedIds.add(la.id); events.push(`Move Herd: ${la.id} rejoined the herd!`); continue; }
+      if (contactsHerd) {
+        console.log(`[moveHerd T${s.turn}] ${la.id} rejoined herd at (${newX.toFixed(2)},${newY.toFixed(2)})`);
+        escapedIds.add(la.id); events.push(`Move Herd: ${la.id} rejoined the herd!`); continue;
+      }
     }
     if (!blocked) events.push(`Move Herd: ${animal.id} moved ${needed.toFixed(1)}" away from dog.`);
   }
@@ -201,10 +291,15 @@ function phaseMoveHerd(state) {
   s.events = [...s.events, ...events];
 
   if (entitiesContact(s.herd, s.pen)) {
+    console.log(`[moveHerd T${s.turn}] herd reached pen — FINISHED`);
     s.events.push("🐑 The herd is in the pen! That'll do!");
     s.phase = 'finished'; return s;
   }
-  s.turn = (s.turn || 1) + 1; s.phase = 'dumb_animals'; return s;
+  s.turn = (s.turn || 1) + 1; s.phase = 'dumb_animals';
+
+  console.log(`[moveHerd T${s.turn - 1}] exit  — herd ${_pos(s.herd)}, loose: ${s.looseAnimals.length}, escaped: ${s.escapedCount || 0}`);
+  _checkStateOob('moveHerd:exit', s);
+  return s;
 }
 
 const PHASE_RUNNERS = {
@@ -219,9 +314,18 @@ function processTurn(state, action, targetPhase) {
   let s = state;
   const MAX_STEPS = 9;
   let steps = 0;
+
+  console.log(`[processTurn] T${s.turn} phase=${s.phase} stopBefore=${stopBefore} action=${action?.type ?? 'null'}`);
+
   while (steps < MAX_STEPS) {
-    if (s.phase === 'finished') return s;
-    if (steps > 0 && s.phase === stopBefore) return s;
+    if (s.phase === 'finished') {
+      console.log(`[processTurn] game finished — returning`);
+      return s;
+    }
+    if (steps > 0 && s.phase === stopBefore) {
+      console.log(`[processTurn] reached stopBefore="${stopBefore}" after ${steps} step(s) — T${s.turn}`);
+      return s;
+    }
     const runner = PHASE_RUNNERS[s.phase];
     if (!runner) throw new Error(`No runner for phase: ${s.phase}`);
     s = runner(s, action);
@@ -436,23 +540,153 @@ const PHASE_META = {
 // APP
 // ─────────────────────────────────────────────────────────────────────────────
 
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ANIMATION HELPERS
+// ─────────────────────────────────────────────────────────────────────────────
+
+function lerp(a, b, t) { return a + (b - a) * t; }
+
+/** Extract just the renderable positions from a game state. */
+function snapshotPos(state) {
+  return {
+    dog:         { x: state.dog.x,  y: state.dog.y  },
+    herd:        { x: state.herd.x, y: state.herd.y },
+    looseAnimals: state.looseAnimals.map(la => ({
+      id: la.id, radius: la.radius, x: la.x, y: la.y,
+    })),
+  };
+}
+
 export default function App() {
-  // Game state
-  const [gameState, setGameState] = useState(null);
-  // UI interaction state
-  const [preview, setPreview] = useState(null);   // {x, y} in game-inches, or null
-  const [invalid, setInvalid]   = useState(false); // flash for out-of-range tap
+  // ── Core game state ───────────────────────────────────────────────────────
+  const [gameState, setGameState]   = useState(null);
+  const [preview,   setPreview]     = useState(null);
+  const [invalid,   setInvalid]     = useState(false);
   const svgRef = useRef(null);
 
-  // ── Bootstrap ───────────────────────────────────────────────────────────────
+  // ── Animation state ───────────────────────────────────────────────────────
+  // displayPos holds the positions actually rendered; lerped during animation.
+  const [displayPos, setDisplayPos] = useState(null);
+  // animRef carries mutable animation bookkeeping outside React render cycle.
+  const animRef = useRef({
+    phase:      'idle',   // 'dog' | 'herd' | 'loose' | 'idle'
+    startMs:    0,
+    fromDog:    null,     // {x,y}
+    toDog:      null,
+    fromHerd:   null,
+    toHerd:     null,
+    // Array of {id, radius, fromX, fromY, toX, toY}
+    looseFrames: [],
+    raf:        null,
+    nextState:  null,     // the full gameState we're animating toward
+  });
+
+  // ── Bootstrap ─────────────────────────────────────────────────────────────
   useEffect(() => {
     const initial = { ...WALK_UP, rng: Math.random };
-    // Run through dumb_animals, stop just before come_by
-    const ready = processTurn(initial, null, 'come_by');
+    const ready   = processTurn(initial, null, 'come_by');
+    // No animation on first load — snap straight to ready state
+    setDisplayPos(snapshotPos(ready));
     setGameState(ready);
   }, []);
 
-  // ── SVG tap → game coordinates ──────────────────────────────────────────────
+  // ── Animation loop ────────────────────────────────────────────────────────
+  // Starts when handleConfirm / handleSkip call commitMove().
+  const runAnim = useCallback(() => {
+    const anim = animRef.current;
+    const now  = performance.now();
+    const t    = Math.min(1, (now - anim.startMs) / 500); // 0..1 over 500 ms
+    const ease = t; // linear per spec
+
+    if (anim.phase === 'dog') {
+      const dx = lerp(anim.fromDog.x, anim.toDog.x, ease);
+      const dy = lerp(anim.fromDog.y, anim.toDog.y, ease);
+      setDisplayPos(prev => ({ ...prev, dog: { x: dx, y: dy } }));
+
+      if (t >= 1) {
+        // Advance to herd stage
+        anim.phase   = 'herd';
+        anim.startMs = performance.now();
+      }
+    } else if (anim.phase === 'herd') {
+      const hx = lerp(anim.fromHerd.x, anim.toHerd.x, ease);
+      const hy = lerp(anim.fromHerd.y, anim.toHerd.y, ease);
+      setDisplayPos(prev => ({ ...prev, herd: { x: hx, y: hy } }));
+
+      if (t >= 1) {
+        // Advance to loose animals stage — show all of them at their from positions
+        anim.phase   = 'loose';
+        anim.startMs = performance.now();
+        // Seed displayPos with all loose animals at their from positions
+        setDisplayPos(prev => ({
+          ...prev,
+          looseAnimals: anim.looseFrames.map(f => ({
+            id: f.id, radius: f.radius, x: f.fromX, y: f.fromY,
+          })),
+        }));
+      }
+    } else if (anim.phase === 'loose') {
+      const frames = anim.looseFrames.map(f => ({
+        id:     f.id,
+        radius: f.radius,
+        x: lerp(f.fromX, f.toX, ease),
+        y: lerp(f.fromY, f.toY, ease),
+      }));
+      setDisplayPos(prev => ({ ...prev, looseAnimals: frames }));
+
+      if (t >= 1) {
+        // Animation complete — snap to final game state positions
+        anim.phase = 'idle';
+        anim.raf   = null;
+        setDisplayPos(snapshotPos(anim.nextState));
+        setGameState(anim.nextState);
+        return; // stop loop
+      }
+    }
+
+    anim.raf = requestAnimationFrame(runAnim);
+  }, []);
+
+  // ── Commit a move: compute from→to, kick off animation ───────────────────
+  const commitMove = useCallback((action) => {
+    if (!gameState) return;
+    const prev = gameState;
+    const next = processTurn(prev, action, 'come_by');
+
+    const anim = animRef.current;
+    // Cancel any in-flight animation
+    if (anim.raf) cancelAnimationFrame(anim.raf);
+
+    // Record from→to for dog
+    anim.fromDog  = { x: prev.dog.x,  y: prev.dog.y  };
+    anim.toDog    = { x: next.dog.x,  y: next.dog.y  };
+
+    // Record from→to for herd
+    anim.fromHerd = { x: prev.herd.x, y: prev.herd.y };
+    anim.toHerd   = { x: next.herd.x, y: next.herd.y };
+
+    // Record from→to for each loose animal in the NEXT state.
+    // New animals (not in prev) start at prev herd position (spawn point).
+    const prevLaMap = Object.fromEntries(prev.looseAnimals.map(la => [la.id, la]));
+    anim.looseFrames = next.looseAnimals.map(la => {
+      const from = prevLaMap[la.id] ?? { x: prev.herd.x, y: prev.herd.y };
+      return { id: la.id, radius: la.radius, fromX: from.x, fromY: from.y, toX: la.x, toY: la.y };
+    });
+
+    anim.nextState = next;
+    anim.phase     = 'dog';
+    anim.startMs   = performance.now();
+
+    // Start displayPos at current (pre-move) positions
+    setDisplayPos(snapshotPos(prev));
+    // Keep gameState as prev during animation; commitMove will set it when done.
+    // (gameState stays prev until anim.phase reaches 'idle')
+
+    anim.raf = requestAnimationFrame(runAnim);
+  }, [gameState, runAnim]);
+
+  // ── SVG tap → game coordinates ───────────────────────────────────────────
   const svgToGame = useCallback((clientX, clientY) => {
     const svg = svgRef.current;
     if (!svg) return null;
@@ -462,19 +696,16 @@ export default function App() {
     return { x: svgX / BOARD_PX * 24, y: svgY / BOARD_PX * 24 };
   }, []);
 
-  // ── Handle tap on board ─────────────────────────────────────────────────────
+  // ── Handle tap on board ───────────────────────────────────────────────────
   const handleBoardTap = useCallback((e) => {
     if (!gameState || gameState.phase !== 'come_by') return;
+    if (animRef.current.phase !== 'idle') return; // ignore taps during animation
     e.preventDefault();
-
     const clientX = e.touches ? e.touches[0].clientX : e.clientX;
     const clientY = e.touches ? e.touches[0].clientY : e.clientY;
     const tap = svgToGame(clientX, clientY);
     if (!tap) return;
-
-    const d = dist(gameState.dog, tap);
-    if (d > DOG_MOVE_MAX) {
-      // Out of range — flash invalid
+    if (dist(gameState.dog, tap) > DOG_MOVE_MAX) {
       setInvalid(true);
       setTimeout(() => setInvalid(false), 600);
       return;
@@ -482,27 +713,32 @@ export default function App() {
     setPreview(tap);
   }, [gameState, svgToGame]);
 
-  // ── Confirm move ────────────────────────────────────────────────────────────
+  // ── Confirm move ──────────────────────────────────────────────────────────
   const handleConfirm = useCallback(() => {
     if (!preview || !gameState) return;
-    const action = { type: 'move_dog', x: preview.x, y: preview.y };
-    const next = processTurn(gameState, action, 'come_by');
-    setGameState(next);
     setPreview(null);
-  }, [preview, gameState]);
+    commitMove({ type: 'move_dog', x: preview.x, y: preview.y });
+  }, [preview, gameState, commitMove]);
 
-  // ── Cancel preview ──────────────────────────────────────────────────────────
+  // ── Cancel preview ────────────────────────────────────────────────────────
   const handleCancel = useCallback(() => setPreview(null), []);
 
-  // ── Skip (end_turn) ──────────────────────────────────────────────────────────
+  // ── Skip ──────────────────────────────────────────────────────────────────
   const handleSkip = useCallback(() => {
     if (!gameState) return;
-    const next = processTurn(gameState, { type: 'end_turn' }, 'come_by');
-    setGameState(next);
     setPreview(null);
-  }, [gameState]);
+    commitMove({ type: 'end_turn' });
+  }, [gameState, commitMove]);
 
-  if (!gameState) {
+  // ── Cleanup rAF on unmount ────────────────────────────────────────────────
+  useEffect(() => {
+    return () => {
+      if (animRef.current.raf) cancelAnimationFrame(animRef.current.raf);
+    };
+  }, []);
+
+  // ── Render ────────────────────────────────────────────────────────────────
+  if (!gameState || !displayPos) {
     return (
       <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100%',
         fontFamily:'monospace',color:'#7a6a48',fontSize:13}}>
@@ -511,13 +747,19 @@ export default function App() {
     );
   }
 
-  const { dog, herd, pen, looseAnimals, phase, turn, escapedCount=0, events=[] } = gameState;
-  const phaseMeta = PHASE_META[phase] || PHASE_META.dumb_animals;
-  const isInteractive = phase === 'come_by' && !gameState.phase !== 'finished';
-  const isFinished = phase === 'finished';
+  const isAnimating  = animRef.current.phase !== 'idle';
+  // During animation use displayPos for positions; use gameState for everything else.
+  // gameState itself is only updated when animation completes, so phase/events/etc.
+  // remain stable (showing the pre-move state in the UI chrome until animation ends).
+  const { phase, turn, escapedCount=0, events=[], pen } = gameState;
+  const dog         = displayPos.dog  ? { ...gameState.dog,  ...displayPos.dog  } : gameState.dog;
+  const herd        = displayPos.herd ? { ...gameState.herd, ...displayPos.herd } : gameState.herd;
+  const looseAnimals = displayPos.looseAnimals ?? gameState.looseAnimals;
 
-  // Last few events for the log
-  const recentEvents = [...events].reverse().slice(0, 12);
+  const phaseMeta   = PHASE_META[phase] || PHASE_META.dumb_animals;
+  const isInteractive = phase === 'come_by' && !isAnimating && phase !== 'finished';
+  const isFinished    = phase === 'finished';
+  const recentEvents  = [...events].reverse().slice(0, 12);
 
   return (
     <div style={{
@@ -554,7 +796,7 @@ export default function App() {
           border:`1px solid ${phaseMeta.border}`,
           whiteSpace:'nowrap',
         }}>
-          {phaseMeta.label}
+          {isAnimating ? 'Animating…' : phaseMeta.label}
         </div>
       </div>
 
@@ -569,10 +811,9 @@ export default function App() {
           ref={svgRef}
           viewBox={`0 0 ${BOARD_PX} ${BOARD_PX}`}
           style={{display:'block', width:'100%', aspectRatio:'1/1', background:'#e8dfc8', touchAction:'none'}}
-          onMouseDown={isInteractive && !preview ? handleBoardTap : undefined}
-          onTouchStart={isInteractive && !preview ? handleBoardTap : undefined}
+          onMouseDown={isInteractive ? handleBoardTap : undefined}
+          onTouchStart={isInteractive ? handleBoardTap : undefined}
         >
-          {/* Grid */}
           <defs>
             <pattern id="g1" width="20" height="20" patternUnits="userSpaceOnUse">
               <path d="M20 0L0 0 0 20" fill="none" stroke="#c4b898" strokeWidth={0.5} opacity={0.55}/>
@@ -592,10 +833,8 @@ export default function App() {
           <PenEntity pen={pen}/>
           <SpookRing dog={dog}/>
 
-          {/* Dog range ring — only during come_by */}
           {isInteractive && <DogRangeRing dog={dog} preview={!!preview}/>}
 
-          {/* Move preview line + ghost */}
           {preview && (
             <>
               <MoveLine from={dog} to={preview}/>
@@ -607,13 +846,11 @@ export default function App() {
           {looseAnimals.map(la => <LooseAnimalEntity key={la.id} la={la}/>)}
           <DogEntity dog={dog}/>
 
-          {/* Invalid tap flash overlay */}
           {invalid && (
             <rect width={BOARD_PX} height={BOARD_PX} fill="rgba(200,64,48,0.12)"
               style={{pointerEvents:'none'}}/>
           )}
 
-          {/* Finished overlay */}
           {isFinished && (
             <g>
               <rect width={BOARD_PX} height={BOARD_PX} fill="rgba(40,80,40,0.55)"/>
@@ -629,7 +866,6 @@ export default function App() {
           )}
         </svg>
 
-        {/* Out-of-range hint */}
         {invalid && (
           <div style={{
             position:'absolute', bottom:8, left:'50%', transform:'translateX(-50%)',
@@ -652,7 +888,7 @@ export default function App() {
           { label:'Turn',     value: turn },
           { label:'Loose',    value: looseAnimals.length },
           { label:'Escaped',  value: escapedCount, danger: true },
-          { label:'Dog↔Herd', value: dist(dog,herd).toFixed(1)+'"', small: true },
+          { label:'Dog↔Herd', value: dist(dog,herd).toFixed(1)+'"'  , small: true },
         ].map((s,i,arr) => (
           <div key={s.label} style={{
             flex:1, textAlign:'center', padding:'7px 4px 6px',
@@ -686,14 +922,16 @@ export default function App() {
           <div style={{fontSize:12,color:'#2a4a2a',fontFamily:'monospace',flex:1,textAlign:'center'}}>
             🐕 Good dog. Give it a pat.
           </div>
-        ) : phase !== 'come_by' ? (
-          <div style={{fontSize:11,color:'#7a6a48',fontFamily:'monospace',flex:1,textAlign:'center'}}>
-            Processing…
+        ) : isAnimating ? (
+          <div style={{fontSize:11,color:'#7a6a48',fontFamily:'monospace',flex:1,textAlign:'center',letterSpacing:'0.04em'}}>
+            {animRef.current.phase === 'dog'  ? 'Dog moving…'        :
+             animRef.current.phase === 'herd' ? 'Herd moving…'       :
+                                                'Animals moving…'}
           </div>
         ) : preview ? (
           <>
             <div style={{fontSize:11,color:'#4a3c22',flex:1}}>
-              Move to ({preview.x.toFixed(1)}", {preview.y.toFixed(1)}")?{' '}
+              Move to ({preview.x.toFixed(1)}", {preview.y.toFixed(1)}")?{" "}
               <span style={{color:'#7a6a48'}}>({dist(dog,preview).toFixed(1)}")</span>
             </div>
             <button onClick={handleCancel} style={btnStyle('ghost')}>Cancel</button>
@@ -737,6 +975,7 @@ export default function App() {
     </div>
   );
 }
+
 
 function btnStyle(variant) {
   const base = {
