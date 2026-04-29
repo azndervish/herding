@@ -335,7 +335,7 @@ function processTurn(state, action, targetPhase) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SCENARIO
+// SCENARIOS
 // ─────────────────────────────────────────────────────────────────────────────
 
 const WALK_UP = {
@@ -350,6 +350,10 @@ const WALK_UP = {
   phase: 'dumb_animals',
   rng: Math.random,
 };
+
+const SCENARIOS = [
+  { id: 'walk_up', name: 'Walk Up', state: WALK_UP },
+];
 
 // ─────────────────────────────────────────────────────────────────────────────
 // BOARD SVG — pure rendering
@@ -537,6 +541,87 @@ const PHASE_META = {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
+// MAP SELECTOR
+// ─────────────────────────────────────────────────────────────────────────────
+
+function MapSelector({ onSelect }) {
+  return (
+    <div style={{
+      fontFamily: "'Source Code Pro', monospace",
+      maxWidth: 480,
+      margin: '0 auto',
+      display: 'flex',
+      flexDirection: 'column',
+      minHeight: '100dvh',
+      background: '#e8dfc8',
+    }}>
+      <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700&family=Source+Code+Pro:wght@400;600&display=swap"/>
+
+      {/* Header */}
+      <div style={{
+        padding: '16px 16px 12px',
+        borderBottom: '1.5px solid #8a7a5a',
+        background: '#ddd3b8',
+      }}>
+        <div style={{
+          fontFamily: "'Playfair Display', serif",
+          fontSize: 22, fontWeight: 700, color: '#3a2e1a',
+          lineHeight: 1.1, marginBottom: 3,
+        }}>
+          Herding<sup style={{
+            fontSize: 11, fontFamily: 'monospace',
+            color: '#7a6a48', fontWeight: 400,
+          }}>28</sup>
+        </div>
+        <div style={{
+          fontSize: 9, textTransform: 'uppercase',
+          letterSpacing: '0.12em', color: '#7a6a48',
+        }}>
+          Choose a field trial
+        </div>
+      </div>
+
+      {/* Map list */}
+      <div style={{ padding: '12px 12px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+        {SCENARIOS.map(scenario => (
+          <button
+            key={scenario.id}
+            onClick={() => onSelect(scenario)}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              width: '100%',
+              padding: '14px 16px',
+              background: '#ddd3b8',
+              border: '1px solid #b0a07a',
+              borderRadius: 3,
+              cursor: 'pointer',
+              textAlign: 'left',
+              WebkitTapHighlightColor: 'transparent',
+              minHeight: 56,
+            }}
+          >
+            <div>
+              <div style={{
+                fontFamily: "'Playfair Display', serif",
+                fontSize: 16, fontWeight: 700,
+                color: '#3a2e1a', lineHeight: 1.2,
+              }}>
+                {scenario.name}
+              </div>
+            </div>
+            <div style={{
+              fontSize: 16, color: '#8a7a5a', lineHeight: 1,
+            }}>›</div>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // APP
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -559,6 +644,10 @@ function snapshotPos(state) {
 }
 
 export default function App() {
+  // ── Screen routing ───────────────────────────────────────────────────────
+  const [screen,    setScreen]      = useState('select'); // 'select' | 'game'
+  const [scenario,  setScenario]    = useState(null);
+
   // ── Core game state ───────────────────────────────────────────────────────
   const [gameState, setGameState]   = useState(null);
   const [preview,   setPreview]     = useState(null);
@@ -582,13 +671,31 @@ export default function App() {
     nextState:  null,     // the full gameState we're animating toward
   });
 
-  // ── Bootstrap ─────────────────────────────────────────────────────────────
-  useEffect(() => {
-    const initial = { ...WALK_UP, rng: Math.random };
+  // ── Start a scenario ─────────────────────────────────────────────────────
+  const startScenario = useCallback((sc) => {
+    // Cancel any in-flight animation
+    const anim = animRef.current;
+    if (anim.raf) { cancelAnimationFrame(anim.raf); anim.raf = null; }
+    anim.phase = 'idle';
+
+    const initial = { ...sc.state, rng: Math.random };
     const ready   = processTurn(initial, null, 'come_by');
-    // No animation on first load — snap straight to ready state
     setDisplayPos(snapshotPos(ready));
     setGameState(ready);
+    setPreview(null);
+    setScenario(sc);
+    setScreen('game');
+  }, []);
+
+  // ── Return to map selector ────────────────────────────────────────────────
+  const goToSelect = useCallback(() => {
+    const anim = animRef.current;
+    if (anim.raf) { cancelAnimationFrame(anim.raf); anim.raf = null; }
+    anim.phase = 'idle';
+    setGameState(null);
+    setDisplayPos(null);
+    setPreview(null);
+    setScreen('select');
   }, []);
 
   // ── Animation loop ────────────────────────────────────────────────────────
@@ -738,6 +845,11 @@ export default function App() {
   }, []);
 
   // ── Render ────────────────────────────────────────────────────────────────
+  // ── Screen routing ───────────────────────────────────────────────────────
+  if (screen === 'select') {
+    return <MapSelector onSelect={startScenario} />;
+  }
+
   if (!gameState || !displayPos) {
     return (
       <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100%',
@@ -919,9 +1031,12 @@ export default function App() {
         display:'flex', alignItems:'center', gap:8,
       }}>
         {isFinished ? (
-          <div style={{fontSize:12,color:'#2a4a2a',fontFamily:'monospace',flex:1,textAlign:'center'}}>
-            🐕 Good dog. Give it a pat.
-          </div>
+          <>
+            <div style={{fontSize:12,color:'#2a4a2a',fontFamily:'monospace',flex:1}}>
+              🐕 Good dog. Give it a pat.
+            </div>
+            <button onClick={goToSelect} style={btnStyle('ghost')}>Maps</button>
+          </>
         ) : isAnimating ? (
           <div style={{fontSize:11,color:'#7a6a48',fontFamily:'monospace',flex:1,textAlign:'center',letterSpacing:'0.04em'}}>
             {animRef.current.phase === 'dog'  ? 'Dog moving…'        :
