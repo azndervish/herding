@@ -1,5 +1,4 @@
-// appEngine.js — engine extracted from App.jsx for testing
-// Auto-generated: do not edit manually; edit App.jsx instead.
+// appEngine.js — auto-generated from App.js
 
 
 const HERD_RADIUS   = 2.5;
@@ -23,6 +22,19 @@ function touchesEdge(e, boardSize) {
 
 function entitiesContact(a, b) { return dist(a, b) <= a.radius + b.radius; }
 
+function circleRectContact(circle, rect) {
+  // Find closest point on rectangle to circle center
+  const closestX = Math.max(rect.x - rect.w/2, Math.min(circle.x, rect.x + rect.w/2));
+  const closestY = Math.max(rect.y - rect.h/2, Math.min(circle.y, rect.y + rect.h/2));
+
+  // Calculate distance from circle center to closest point
+  const dx = circle.x - closestX;
+  const dy = circle.y - closestY;
+  const distSquared = dx * dx + dy * dy;
+
+  return distSquared <= (circle.radius * circle.radius);
+}
+
 function rollDie(faces, rng) { return Math.floor(rng() * faces) + 1; }
 
 function angleToOffset(angleDeg, inches) {
@@ -41,10 +53,45 @@ function cloneState(s) {
   };
 }
 
+// DEBUG HELPERS
+
+function _pos(e) {
+  return `(${e.x.toFixed(2)}, ${e.y.toFixed(2)}) r=${e.radius}`;
+}
+
+/** Returns an array of human-readable boundary violations for entity e. */
+function _oobViolations(e, boardSize) {
+  const v = [];
+  if (e.x - e.radius < 0)         v.push(`left  | x=${e.x.toFixed(2)} < ${e.radius}`);
+  if (e.y - e.radius < 0)         v.push(`top   | y=${e.y.toFixed(2)} < ${e.radius}`);
+  if (e.x + e.radius > boardSize) v.push(`right | x=${e.x.toFixed(2)} > ${(boardSize - e.radius).toFixed(2)}`);
+  if (e.y + e.radius > boardSize) v.push(`bot   | y=${e.y.toFixed(2)} > ${(boardSize - e.radius).toFixed(2)}`);
+  return v;
+}
+
+/** Logs a warn line for every boundary violation on a single entity. */
+function _checkOob(tag, e, boardSize) {
+  _oobViolations(e, boardSize).forEach(msg =>
+    console.warn(`[OOB] ${tag} "${e.id}" — ${msg}`)
+  );
+}
+
+/** Checks every entity in state for boundary violations. */
+function _checkStateOob(tag, s) {
+  _checkOob(tag, s.herd, s.boardSize);
+  _checkOob(tag, s.dog,  s.boardSize);
+  s.looseAnimals.forEach(la => _checkOob(tag, la, s.boardSize));
+}
+
+
 function phaseDumbAnimals(state) {
   const s = cloneState(state);
   const { rng, boardSize } = s;
   const events = [];
+
+  console.log(`[dumbAnimals T${s.turn}] entry — herd ${_pos(s.herd)}, dog ${_pos(s.dog)}, loose: ${s.looseAnimals.length}`);
+  _checkStateOob('dumbAnimals:entry', s);
+
   const animals = [s.herd, ...s.looseAnimals].sort(
     (a, b) => dist(b, s.dog) - dist(a, s.dog)
   );
@@ -53,9 +100,12 @@ function phaseDumbAnimals(state) {
     const angle = rng() * 360;
     const { dx, dy } = angleToOffset(angle, roll);
     if (animal.type === 'herd') {
+      const _hBefore = { x: s.herd.x, y: s.herd.y };
       s.herd.x += dx; s.herd.y += dy;
+      console.log(`[dumbAnimals T${s.turn}] herd: roll=${roll} angle=${angle.toFixed(0)}° | (${_hBefore.x.toFixed(2)},${_hBefore.y.toFixed(2)}) → ${_pos(s.herd)}`);
       events.push(`Dumb Animals: Herd wanders ${roll}" (${angle.toFixed(0)}°).`);
       if (touchesEdge(s.herd, boardSize)) {
+        console.warn(`[dumbAnimals T${s.turn}] herd OOB at ${_pos(s.herd)} — clamping to board`);
         s.herd.x = Math.max(s.herd.radius, Math.min(boardSize - s.herd.radius, s.herd.x));
         s.herd.y = Math.max(s.herd.radius, Math.min(boardSize - s.herd.radius, s.herd.y));
         s.escapedCount = (s.escapedCount || 0) + 1;
@@ -64,19 +114,30 @@ function phaseDumbAnimals(state) {
     } else {
       const la = s.looseAnimals.find(a => a.id === animal.id);
       if (la) {
+        const _laBefore = { x: la.x, y: la.y };
         la.x += dx; la.y += dy;
+        console.log(`[dumbAnimals T${s.turn}] ${la.id}: roll=${roll} angle=${angle.toFixed(0)}° | (${_laBefore.x.toFixed(2)},${_laBefore.y.toFixed(2)}) → ${_pos(la)}`);
         events.push(`Dumb Animals: ${la.id} wanders ${roll}".`);
-        if (touchesEdge(la, boardSize)) { la._escaped = true; events.push(`${la.id} reached the edge and escaped!`); }
+        if (touchesEdge(la, boardSize)) {
+          console.warn(`[dumbAnimals T${s.turn}] ${la.id} OOB at ${_pos(la)} — marking escaped`);
+          la._escaped = true; events.push(`${la.id} reached the edge and escaped!`);
+        }
       }
     }
   }
   const rejoined = [];
   for (const la of s.looseAnimals) {
-    if (!la._escaped && entitiesContact(la, s.herd)) { rejoined.push(la.id); events.push(`${la.id} rejoined the herd!`); }
+    if (!la._escaped && entitiesContact(la, s.herd)) {
+      console.log(`[dumbAnimals T${s.turn}] ${la.id} rejoined herd (dist=${dist(la, s.herd).toFixed(2)}")`);
+      rejoined.push(la.id); events.push(`${la.id} rejoined the herd!`);
+    }
   }
   s.looseAnimals = s.looseAnimals.filter(a => !rejoined.includes(a.id) && !a._escaped);
   s.events = [...s.events, ...events];
   s.phase = 'come_by';
+
+  console.log(`[dumbAnimals T${s.turn}] exit  — herd ${_pos(s.herd)}, loose: ${s.looseAnimals.length}, escaped: ${s.escapedCount || 0}`);
+  _checkStateOob('dumbAnimals:exit', s);
   return s;
 }
 
@@ -96,13 +157,19 @@ function rayCircleIntersect(from, to, obstacle) {
 function phaseComeBy(state, action) {
   const s = cloneState(state);
   const events = [];
+
+  console.log(`[comeBy T${s.turn}] entry — dog ${_pos(s.dog)}, action=${JSON.stringify(action)}`);
+  _checkStateOob('comeBy:entry', s);
+
   if (!action || action.type === 'end_turn') {
+    console.log(`[comeBy T${s.turn}] dog holds position`);
     events.push('Come-by: Dog holds position.');
     s.events = [...s.events, ...events]; s.phase = 'loose_animal'; return s;
   }
   if (action.type !== 'move_dog') throw new Error(`Unknown action: ${action.type}`);
   const target = { x: action.x, y: action.y };
   const distance = dist(s.dog, target);
+  console.log(`[comeBy T${s.turn}] target=(${target.x.toFixed(2)},${target.y.toFixed(2)}) dist=${distance.toFixed(2)}"${distance > DOG_MOVE_MAX ? ' ⚠ EXCEEDS MAX' : ''}`);
   if (distance > DOG_MOVE_MAX + 1e-9) throw new Error(`Move exceeds max ${DOG_MOVE_MAX}".`);
   const obstacles = [s.herd, ...s.looseAnimals];
   let closestBlock = Infinity, blockedEntity = null;
@@ -114,11 +181,14 @@ function phaseComeBy(state, action) {
     const dir = unitVector(s.dog, target);
     const stopDist = Math.max(0, closestBlock - (s.dog.radius + blockedEntity.radius) - 0.01);
     s.dog.x += dir.x * stopDist; s.dog.y += dir.y * stopDist;
+    console.log(`[comeBy T${s.turn}] dog blocked by ${blockedEntity.id} at dist=${closestBlock.toFixed(2)}", stopped at ${_pos(s.dog)}`);
     events.push(`Come-by: Dog blocked by ${blockedEntity.id}, stopped at (${s.dog.x.toFixed(1)}, ${s.dog.y.toFixed(1)}).`);
   } else {
     s.dog.x = target.x; s.dog.y = target.y;
+    console.log(`[comeBy T${s.turn}] dog moved to ${_pos(s.dog)}`);
     events.push(`Come-by: Dog moves to (${s.dog.x.toFixed(1)}, ${s.dog.y.toFixed(1)}).`);
   }
+  _checkOob('comeBy:exit | dog', s.dog, s.boardSize);
   s.events = [...s.events, ...events]; s.phase = 'loose_animal'; return s;
 }
 
@@ -126,9 +196,14 @@ function phaseLooseAnimal(state) {
   const s = cloneState(state);
   const { rng } = s;
   const events = [];
+
   const dogToHerd = dist(s.dog, s.herd);
+  console.log(`[looseAnimal T${s.turn}] entry — dog ${_pos(s.dog)}, herd ${_pos(s.herd)}, dog↔herd=${dogToHerd.toFixed(2)}"`);
+  _checkStateOob('looseAnimal:entry', s);
+
   if (dogToHerd <= DOG_SPOOK_RANGE) {
     const roll = rollDie(8, rng);
+    console.log(`[looseAnimal T${s.turn}] within spook range — D8 roll: ${roll} vs distance ${dogToHerd.toFixed(2)}"`);
     events.push(`Loose Animal: Dog ${dogToHerd.toFixed(1)}" from herd. Rolled D8: ${roll}.`);
     if (roll >= dogToHerd) {
       const spawnDist = rollDie(6, rng);
@@ -136,6 +211,8 @@ function phaseLooseAnimal(state) {
       const { dx, dy } = angleToOffset(angle, spawnDist);
       const newId = `loose_${s.looseAnimals.length + 1}_t${s.turn}`;
       const la = { id: newId, type: 'loose', radius: TOKEN_RADIUS, x: s.herd.x + dx, y: s.herd.y + dy };
+      console.log(`[looseAnimal T${s.turn}] spawned ${newId} — ${spawnDist}" @ ${angle.toFixed(0)}° → ${_pos(la)}`);
+      _checkOob(`looseAnimal:spawn | ${newId}`, la, s.boardSize);
       s.looseAnimals.push(la);
       events.push(`Loose Animal: Animal spooked! ${newId} placed ${spawnDist}" from herd.`);
     } else {
@@ -144,26 +221,38 @@ function phaseLooseAnimal(state) {
   } else {
     events.push(`Loose Animal: Dog ${dogToHerd.toFixed(1)}" away — too far to spook.`);
   }
-  s.events = [...s.events, ...events]; s.phase = 'move_herd'; return s;
+  s.events = [...s.events, ...events]; s.phase = 'move_herd';
+
+  _checkStateOob('looseAnimal:exit', s);
+  return s;
 }
 
 function phaseMoveHerd(state) {
   const s = cloneState(state);
   const { boardSize } = s;
   const events = [];
+
+  console.log(`[moveHerd T${s.turn}] entry — herd ${_pos(s.herd)}, dog ${_pos(s.dog)}, loose: ${s.looseAnimals.length}`);
+  _checkStateOob('moveHerd:entry', s);
+
   const animals = [s.herd, ...s.looseAnimals].sort((a,b) => dist(b,s.dog) - dist(a,s.dog));
   const escapedIds = new Set();
 
   for (const animal of animals) {
     if (escapedIds.has(animal.id)) continue;
     const d = dist(animal, s.dog);
-    if (d >= HERD_CLEARANCE) continue;
+    if (d >= HERD_CLEARANCE) {
+      console.log(`[moveHerd T${s.turn}] ${animal.id} already ${d.toFixed(2)}" from dog — no push needed`);
+      continue;
+    }
     const needed = HERD_CLEARANCE - d;
     const dir = unitVector(s.dog, animal);
     let newX = animal.x + dir.x * needed, newY = animal.y + dir.y * needed;
+    console.log(`[moveHerd T${s.turn}] ${animal.id}: dist=${d.toFixed(2)}", pushing ${needed.toFixed(2)}" → (${newX.toFixed(2)},${newY.toFixed(2)})`);
     const wouldEscape = newX < animal.radius || newY < animal.radius ||
                         newX > boardSize - animal.radius || newY > boardSize - animal.radius;
     if (wouldEscape) {
+      console.warn(`[moveHerd T${s.turn}] ${animal.id} would escape at (${newX.toFixed(2)},${newY.toFixed(2)}) — clamping`);
       newX = Math.max(animal.radius, Math.min(boardSize - animal.radius, newX));
       newY = Math.max(animal.radius, Math.min(boardSize - animal.radius, newY));
       if (animal.type === 'herd') {
@@ -184,6 +273,7 @@ function phaseMoveHerd(state) {
       if (entitiesContact(testPos, other)) {
         const stopDist = Math.max(0, dist(animal, other) - animal.radius - other.radius - 0.01);
         newX = animal.x + dir.x * stopDist; newY = animal.y + dir.y * stopDist;
+        console.log(`[moveHerd T${s.turn}] ${animal.id} blocked by ${other.id}, stopping at (${newX.toFixed(2)},${newY.toFixed(2)})`);
         events.push(`Move Herd: ${animal.id} stopped — contact with ${other.id}.`);
         blocked = true; break;
       }
@@ -197,18 +287,26 @@ function phaseMoveHerd(state) {
       const la = s.looseAnimals.find(a => a.id === animal.id);
       const contactsHerd = la && (entitiesContact(la, s.herd) ||
         (blocked && dist({ x: newX, y: newY }, s.herd) <= la.radius + s.herd.radius + 0.05));
-      if (contactsHerd) { escapedIds.add(la.id); events.push(`Move Herd: ${la.id} rejoined the herd!`); continue; }
+      if (contactsHerd) {
+        console.log(`[moveHerd T${s.turn}] ${la.id} rejoined herd at (${newX.toFixed(2)},${newY.toFixed(2)})`);
+        escapedIds.add(la.id); events.push(`Move Herd: ${la.id} rejoined the herd!`); continue;
+      }
     }
     if (!blocked) events.push(`Move Herd: ${animal.id} moved ${needed.toFixed(1)}" away from dog.`);
   }
   s.looseAnimals = s.looseAnimals.filter(a => !escapedIds.has(a.id) && !a._escaped);
   s.events = [...s.events, ...events];
 
-  if (entitiesContact(s.herd, s.pen)) {
+  if (circleRectContact(s.herd, s.pen)) {
+    console.log(`[moveHerd T${s.turn}] herd reached pen — FINISHED`);
     s.events.push("🐑 The herd is in the pen! That'll do!");
     s.phase = 'finished'; return s;
   }
-  s.turn = (s.turn || 1) + 1; s.phase = 'dumb_animals'; return s;
+  s.turn = (s.turn || 1) + 1; s.phase = 'dumb_animals';
+
+  console.log(`[moveHerd T${s.turn - 1}] exit  — herd ${_pos(s.herd)}, loose: ${s.looseAnimals.length}, escaped: ${s.escapedCount || 0}`);
+  _checkStateOob('moveHerd:exit', s);
+  return s;
 }
 
 const PHASE_RUNNERS = {
@@ -223,9 +321,18 @@ function processTurn(state, action, targetPhase) {
   let s = state;
   const MAX_STEPS = 9;
   let steps = 0;
+
+  console.log(`[processTurn] T${s.turn} phase=${s.phase} stopBefore=${stopBefore} action=${action?.type ?? 'null'}`);
+
   while (steps < MAX_STEPS) {
-    if (s.phase === 'finished') return s;
-    if (steps > 0 && s.phase === stopBefore) return s;
+    if (s.phase === 'finished') {
+      console.log(`[processTurn] game finished — returning`);
+      return s;
+    }
+    if (steps > 0 && s.phase === stopBefore) {
+      console.log(`[processTurn] reached stopBefore="${stopBefore}" after ${steps} step(s) — T${s.turn}`);
+      return s;
+    }
     const runner = PHASE_RUNNERS[s.phase];
     if (!runner) throw new Error(`No runner for phase: ${s.phase}`);
     s = runner(s, action);
@@ -236,13 +343,12 @@ function processTurn(state, action, targetPhase) {
 
 
 
-// ── SCENARIO ──
 
 const WALK_UP = {
   boardSize: 24,
   dog:  { id: 'dog',  type: 'dog',  x: 1,  y: 22, radius: TOKEN_RADIUS },
   herd: { id: 'herd', type: 'herd', x: 6,  y: 10, radius: HERD_RADIUS  },
-  pen:  { id: 'pen',  type: 'pen',  x: 18, y: 10, radius: 4            },
+  pen:  { id: 'pen',  type: 'pen',  x: 18, y: 10, w: 8, h: 6          },
   looseAnimals: [],
   escapedCount: 0,
   events: [],
@@ -251,12 +357,15 @@ const WALK_UP = {
   rng: Math.random,
 };
 
+const SCENARIOS = [
+  { id: 'walk_up', name: 'Walk Up', state: WALK_UP },
+];
+
 
 
 export {
   HERD_RADIUS, TOKEN_RADIUS, DOG_MOVE_MAX, DOG_SPOOK_RANGE, HERD_CLEARANCE,
-  dist, unitVector, touchesEdge, entitiesContact, rollDie, angleToOffset, cloneState,
+  dist, unitVector, touchesEdge, entitiesContact, circleRectContact, rollDie, angleToOffset, cloneState,
   phaseDumbAnimals, phaseComeBy, phaseLooseAnimal, phaseMoveHerd,
-  processTurn,
-  WALK_UP,
+  processTurn, WALK_UP, SCENARIOS,
 };

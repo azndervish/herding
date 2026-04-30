@@ -67,7 +67,7 @@ function makeState(overrides = {}) {
     rng: fixedRng(0.5),
     dog:  { id: 'dog',  type: 'dog',  x: 12, y: 12, radius: TOKEN_RADIUS },
     herd: { id: 'herd', type: 'herd', x: 12, y: 6,  radius: HERD_RADIUS  },
-    pen:  { id: 'pen',  type: 'pen',  x: 22, y: 22, radius: 2.5          },
+    pen:  { id: 'pen',  type: 'pen',  x: 22, y: 22, w: 5, h: 5           },
     looseAnimals: [],
     ...overrides,
   };
@@ -573,11 +573,11 @@ describe('phaseMoveHerd', () => {
   });
 
   it('detects win when herd centre enters pen', () => {
-    // Place herd at same position as pen
+    // Place herd at same position as pen center
     const s0 = mhState({
       dog:  { id:'dog',  type:'dog',  x:12, y:12, radius:TOKEN_RADIUS },
       herd: { id:'herd', type:'herd', x:22, y:22, radius:HERD_RADIUS },
-      pen:  { id:'pen',  type:'pen',  x:22, y:22, radius:2.5 },
+      pen:  { id:'pen',  type:'pen',  x:22, y:22, w: 5, h: 5 },
     });
     s0.phase = 'move_herd';
     const s = phaseMoveHerd(s0);
@@ -708,7 +708,7 @@ describe('processTurn', () => {
     const s0 = makeState({
       dog:  { id:'dog',  type:'dog',  x:12, y:12, radius:TOKEN_RADIUS },
       herd: { id:'herd', type:'herd', x:22, y:22, radius:HERD_RADIUS },
-      pen:  { id:'pen',  type:'pen',  x:22, y:22, radius:2.5 },
+      pen:  { id:'pen',  type:'pen',  x:22, y:22, w: 5, h: 5 },
       phase: 'move_herd',
     });
     const s = processTurn(s0, null, 'dumb_animals');
@@ -735,7 +735,7 @@ describe('processTurn', () => {
         rng: fixedRng(0.5),
         dog:  { id:'dog',  type:'dog',  x:12, y:12, radius:TOKEN_RADIUS },
         herd: { id:'herd', type:'herd', x:12, y:6,  radius:HERD_RADIUS },
-        pen:  { id:'pen',  type:'pen',  x:0,  y:0,  radius:2.5 },
+        pen:  { id:'pen',  type:'pen',  x:0,  y:0,  w: 5, h: 5 },
       });
     }
 
@@ -779,8 +779,9 @@ describe('WALK_UP scenario', () => {
     assert.equal(WALK_UP.pen.y,  10);
   });
 
-  it('pen has radius 4 (larger than standard)', () => {
-    assert.equal(WALK_UP.pen.radius, 4);
+  it('pen is 8" wide by 6" tall rectangle', () => {
+    assert.equal(WALK_UP.pen.w, 8);
+    assert.equal(WALK_UP.pen.h, 6);
   });
 
   it('starts with no loose animals', () => {

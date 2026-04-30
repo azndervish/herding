@@ -25,6 +25,19 @@ function touchesEdge(e, boardSize) {
 
 function entitiesContact(a, b) { return dist(a, b) <= a.radius + b.radius; }
 
+function circleRectContact(circle, rect) {
+  // Find closest point on rectangle to circle center
+  const closestX = Math.max(rect.x - rect.w/2, Math.min(circle.x, rect.x + rect.w/2));
+  const closestY = Math.max(rect.y - rect.h/2, Math.min(circle.y, rect.y + rect.h/2));
+
+  // Calculate distance from circle center to closest point
+  const dx = circle.x - closestX;
+  const dy = circle.y - closestY;
+  const distSquared = dx * dx + dy * dy;
+
+  return distSquared <= (circle.radius * circle.radius);
+}
+
 function rollDie(faces, rng) { return Math.floor(rng() * faces) + 1; }
 
 function angleToOffset(angleDeg, inches) {
@@ -290,7 +303,7 @@ function phaseMoveHerd(state) {
   s.looseAnimals = s.looseAnimals.filter(a => !escapedIds.has(a.id) && !a._escaped);
   s.events = [...s.events, ...events];
 
-  if (entitiesContact(s.herd, s.pen)) {
+  if (circleRectContact(s.herd, s.pen)) {
     console.log(`[moveHerd T${s.turn}] herd reached pen — FINISHED`);
     s.events.push("🐑 The herd is in the pen! That'll do!");
     s.phase = 'finished'; return s;
@@ -342,7 +355,7 @@ const WALK_UP = {
   boardSize: 24,
   dog:  { id: 'dog',  type: 'dog',  x: 1,  y: 22, radius: TOKEN_RADIUS },
   herd: { id: 'herd', type: 'herd', x: 6,  y: 10, radius: HERD_RADIUS  },
-  pen:  { id: 'pen',  type: 'pen',  x: 18, y: 10, radius: 4            },
+  pen:  { id: 'pen',  type: 'pen',  x: 18, y: 10, w: 8, h: 6          },
   looseAnimals: [],
   escapedCount: 0,
   events: [],
@@ -410,16 +423,17 @@ function RulerLayer() {
 }
 
 function PenEntity({ pen }) {
-  const cx=toPx(pen.x), cy=toPx(pen.y), r=toPx(pen.radius);
+  const cx=toPx(pen.x), cy=toPx(pen.y), w=toPx(pen.w), h=toPx(pen.h);
+  const x = cx - w/2, y = cy - h/2;
   return (
     <g>
-      <circle cx={cx} cy={cy} r={r} fill="#ede4c8" stroke="#7a5a38"
+      <rect x={x} y={y} width={w} height={h} fill="#ede4c8" stroke="#7a5a38"
         strokeWidth={1.5} strokeDasharray="6,3" opacity={0.85}/>
-      <line x1={cx-r*.6} y1={cy-r*.6} x2={cx+r*.6} y2={cy+r*.6}
+      <line x1={x} y1={y} x2={x+w} y2={y+h}
         stroke="#7a5a38" strokeWidth={1} opacity={0.25}/>
-      <line x1={cx+r*.6} y1={cy-r*.6} x2={cx-r*.6} y2={cy+r*.6}
+      <line x1={x+w} y1={y} x2={x} y2={y+h}
         stroke="#7a5a38" strokeWidth={1} opacity={0.25}/>
-      <text x={cx} y={cy+r+14} textAnchor="middle"
+      <text x={cx} y={cy+h/2+14} textAnchor="middle"
         fontSize={10} fontFamily="monospace" fontWeight="600"
         fill="#7a5a38" letterSpacing={1}>PEN</text>
     </g>
@@ -659,7 +673,7 @@ export default function App() {
   const [displayPos, setDisplayPos] = useState(null);
   // animRef carries mutable animation bookkeeping outside React render cycle.
   const animRef = useRef({
-    phase:      'idle',   // 'dog' | 'herd' | 'loose' | 'idle'
+    phase:      'idle',   // 'dog' | 'loose' | 'herd' | 'dumb_loose' | 'dumb_herd' | 'idle'
     startMs:    0,
     fromDog:    null,     // {x,y}
     toDog:      null,
@@ -667,8 +681,13 @@ export default function App() {
     toHerd:     null,
     // Array of {id, radius, fromX, fromY, toX, toY}
     looseFrames: [],
+    // Second animation set for dumb_animals phase
+    fromHerd2:   null,
+    toHerd2:     null,
+    looseFrames2: [],
     raf:        null,
-    nextState:  null,     // the full gameState we're animating toward
+    midState:   null,     // state after move_herd, before dumb_animals
+    finalState: null,     // final state after dumb_animals
   });
 
   // ── Start a scenario ─────────────────────────────────────────────────────
@@ -712,26 +731,22 @@ export default function App() {
       setDisplayPos(prev => ({ ...prev, dog: { x: dx, y: dy } }));
 
       if (t >= 1) {
-        // Advance to herd stage
-        anim.phase   = 'herd';
-        anim.startMs = performance.now();
-      }
-    } else if (anim.phase === 'herd') {
-      const hx = lerp(anim.fromHerd.x, anim.toHerd.x, ease);
-      const hy = lerp(anim.fromHerd.y, anim.toHerd.y, ease);
-      setDisplayPos(prev => ({ ...prev, herd: { x: hx, y: hy } }));
-
-      if (t >= 1) {
-        // Advance to loose animals stage — show all of them at their from positions
-        anim.phase   = 'loose';
-        anim.startMs = performance.now();
-        // Seed displayPos with all loose animals at their from positions
-        setDisplayPos(prev => ({
-          ...prev,
-          looseAnimals: anim.looseFrames.map(f => ({
-            id: f.id, radius: f.radius, x: f.fromX, y: f.fromY,
-          })),
-        }));
+        // Skip loose animals stage if there are none
+        if (anim.looseFrames.length === 0) {
+          anim.phase   = 'herd';
+          anim.startMs = performance.now();
+        } else {
+          // Advance to loose animals stage — show all of them at their from positions
+          anim.phase   = 'loose';
+          anim.startMs = performance.now();
+          // Seed displayPos with all loose animals at their from positions
+          setDisplayPos(prev => ({
+            ...prev,
+            looseAnimals: anim.looseFrames.map(f => ({
+              id: f.id, radius: f.radius, x: f.fromX, y: f.fromY,
+            })),
+          }));
+        }
       }
     } else if (anim.phase === 'loose') {
       const frames = anim.looseFrames.map(f => ({
@@ -743,11 +758,69 @@ export default function App() {
       setDisplayPos(prev => ({ ...prev, looseAnimals: frames }));
 
       if (t >= 1) {
+        // Advance to herd stage
+        anim.phase   = 'herd';
+        anim.startMs = performance.now();
+      }
+    } else if (anim.phase === 'herd') {
+      const hx = lerp(anim.fromHerd.x, anim.toHerd.x, ease);
+      const hy = lerp(anim.fromHerd.y, anim.toHerd.y, ease);
+      setDisplayPos(prev => ({ ...prev, herd: { x: hx, y: hy } }));
+
+      if (t >= 1) {
+        // Transition to dumb_animals phase animations
+        // Check if there are loose animals that wander
+        if (anim.looseFrames2.length > 0) {
+          anim.phase = 'dumb_loose';
+          anim.startMs = performance.now();
+          // Seed displayPos with loose animals at their post-move_herd positions
+          setDisplayPos(prev => ({
+            ...prev,
+            looseAnimals: anim.looseFrames2.map(f => ({
+              id: f.id, radius: f.radius, x: f.fromX, y: f.fromY,
+            })),
+          }));
+        } else {
+          // Check if herd wanders
+          const herdMoved = anim.fromHerd2.x !== anim.toHerd2.x || anim.fromHerd2.y !== anim.toHerd2.y;
+          if (herdMoved) {
+            anim.phase = 'dumb_herd';
+            anim.startMs = performance.now();
+          } else {
+            // No dumb_animals movement, finish
+            anim.phase = 'idle';
+            anim.raf   = null;
+            setDisplayPos(snapshotPos(anim.finalState));
+            setGameState(anim.finalState);
+            return; // stop loop
+          }
+        }
+      }
+    } else if (anim.phase === 'dumb_loose') {
+      const frames = anim.looseFrames2.map(f => ({
+        id:     f.id,
+        radius: f.radius,
+        x: lerp(f.fromX, f.toX, ease),
+        y: lerp(f.fromY, f.toY, ease),
+      }));
+      setDisplayPos(prev => ({ ...prev, looseAnimals: frames }));
+
+      if (t >= 1) {
+        // Advance to dumb_herd stage
+        anim.phase   = 'dumb_herd';
+        anim.startMs = performance.now();
+      }
+    } else if (anim.phase === 'dumb_herd') {
+      const hx = lerp(anim.fromHerd2.x, anim.toHerd2.x, ease);
+      const hy = lerp(anim.fromHerd2.y, anim.toHerd2.y, ease);
+      setDisplayPos(prev => ({ ...prev, herd: { x: hx, y: hy } }));
+
+      if (t >= 1) {
         // Animation complete — snap to final game state positions
         anim.phase = 'idle';
         anim.raf   = null;
-        setDisplayPos(snapshotPos(anim.nextState));
-        setGameState(anim.nextState);
+        setDisplayPos(snapshotPos(anim.finalState));
+        setGameState(anim.finalState);
         return; // stop loop
       }
     }
@@ -759,31 +832,53 @@ export default function App() {
   const commitMove = useCallback((action) => {
     if (!gameState) return;
     const prev = gameState;
-    const next = processTurn(prev, action, 'come_by');
+
+    // Process through move_herd, stop before dumb_animals
+    const afterMoveHerd = processTurn(prev, action, 'dumb_animals');
+
+    // Process dumb_animals, stop before come_by
+    const final = processTurn(afterMoveHerd, null, 'come_by');
 
     const anim = animRef.current;
     // Cancel any in-flight animation
     if (anim.raf) cancelAnimationFrame(anim.raf);
 
+    // ── First animation: move_herd phase (dog + loose + herd movements) ────
+
     // Record from→to for dog
     anim.fromDog  = { x: prev.dog.x,  y: prev.dog.y  };
-    anim.toDog    = { x: next.dog.x,  y: next.dog.y  };
+    anim.toDog    = { x: afterMoveHerd.dog.x,  y: afterMoveHerd.dog.y  };
 
     // Record from→to for herd
     anim.fromHerd = { x: prev.herd.x, y: prev.herd.y };
-    anim.toHerd   = { x: next.herd.x, y: next.herd.y };
+    anim.toHerd   = { x: afterMoveHerd.herd.x, y: afterMoveHerd.herd.y };
 
-    // Record from→to for each loose animal in the NEXT state.
+    // Record from→to for each loose animal during move_herd.
     // New animals (not in prev) start at prev herd position (spawn point).
     const prevLaMap = Object.fromEntries(prev.looseAnimals.map(la => [la.id, la]));
-    anim.looseFrames = next.looseAnimals.map(la => {
+    anim.looseFrames = afterMoveHerd.looseAnimals.map(la => {
       const from = prevLaMap[la.id] ?? { x: prev.herd.x, y: prev.herd.y };
       return { id: la.id, radius: la.radius, fromX: from.x, fromY: from.y, toX: la.x, toY: la.y };
     });
 
-    anim.nextState = next;
-    anim.phase     = 'dog';
-    anim.startMs   = performance.now();
+    // ── Second animation: dumb_animals phase (wandering) ────
+
+    // Record from→to for herd during dumb_animals
+    anim.fromHerd2 = { x: afterMoveHerd.herd.x, y: afterMoveHerd.herd.y };
+    anim.toHerd2   = { x: final.herd.x, y: final.herd.y };
+
+    // Record from→to for loose animals during dumb_animals
+    const midLaMap = Object.fromEntries(afterMoveHerd.looseAnimals.map(la => [la.id, la]));
+    anim.looseFrames2 = final.looseAnimals.map(la => {
+      const from = midLaMap[la.id];
+      if (!from) return null; // animal was removed (escaped/rejoined)
+      return { id: la.id, radius: la.radius, fromX: from.x, fromY: from.y, toX: la.x, toY: la.y };
+    }).filter(Boolean);
+
+    anim.midState   = afterMoveHerd;
+    anim.finalState = final;
+    anim.phase      = 'dog';
+    anim.startMs    = performance.now();
 
     // Start displayPos at current (pre-move) positions
     setDisplayPos(snapshotPos(prev));
@@ -1039,9 +1134,11 @@ export default function App() {
           </>
         ) : isAnimating ? (
           <div style={{fontSize:11,color:'#7a6a48',fontFamily:'monospace',flex:1,textAlign:'center',letterSpacing:'0.04em'}}>
-            {animRef.current.phase === 'dog'  ? 'Dog moving…'        :
-             animRef.current.phase === 'herd' ? 'Herd moving…'       :
-                                                'Animals moving…'}
+            {animRef.current.phase === 'dog'        ? 'Dog moving…' :
+             animRef.current.phase === 'loose'      ? 'Loose animals fleeing…' :
+             animRef.current.phase === 'herd'       ? 'Herd pushed back…' :
+             animRef.current.phase === 'dumb_loose' ? 'Loose animals wandering…' :
+                                                      'Herd wandering…'}
           </div>
         ) : preview ? (
           <>
