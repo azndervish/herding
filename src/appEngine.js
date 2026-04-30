@@ -179,7 +179,7 @@ function phaseComeBy(state, action) {
   }
   if (blockedEntity !== null) {
     const dir = unitVector(s.dog, target);
-    const stopDist = Math.max(0, closestBlock - (s.dog.radius + blockedEntity.radius) - 0.01);
+    const stopDist = Math.max(0, closestBlock - 0.01);
     s.dog.x += dir.x * stopDist; s.dog.y += dir.y * stopDist;
     console.log(`[comeBy T${s.turn}] dog blocked by ${blockedEntity.id} at dist=${closestBlock.toFixed(2)}", stopped at ${_pos(s.dog)}`);
     events.push(`Come-by: Dog blocked by ${blockedEntity.id}, stopped at (${s.dog.x.toFixed(1)}, ${s.dog.y.toFixed(1)}).`);
