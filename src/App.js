@@ -38,6 +38,47 @@ function circleRectContact(circle, rect) {
   return distSquared <= (circle.radius * circle.radius);
 }
 
+function getPenWalls(pen) {
+  // Returns array of line segments [x1, y1, x2, y2] for closed sides only
+  // Open side has no walls - animals can enter/exit freely
+  const left = pen.x - pen.w/2;
+  const right = pen.x + pen.w/2;
+  const top = pen.y - pen.h/2;
+  const bottom = pen.y + pen.h/2;
+
+  const walls = [];
+
+  // Only add walls for closed sides
+  if (pen.openSide !== 'left')   walls.push([left, top, left, bottom]);     // left wall
+  if (pen.openSide !== 'right')  walls.push([right, top, right, bottom]);   // right wall
+  if (pen.openSide !== 'top')    walls.push([left, top, right, top]);       // top wall
+  if (pen.openSide !== 'bottom') walls.push([left, bottom, right, bottom]); // bottom wall
+
+  return walls;
+}
+
+function distToSegment(px, py, x1, y1, x2, y2) {
+  // Distance from point (px, py) to line segment (x1,y1)-(x2,y2)
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  const lenSq = dx*dx + dy*dy;
+
+  if (lenSq === 0) return Math.sqrt((px-x1)*(px-x1) + (py-y1)*(py-y1)); // point segment
+
+  // Find closest point on segment
+  let t = ((px - x1) * dx + (py - y1) * dy) / lenSq;
+  t = Math.max(0, Math.min(1, t));
+
+  const closestX = x1 + t * dx;
+  const closestY = y1 + t * dy;
+
+  return Math.sqrt((px - closestX) * (px - closestX) + (py - closestY) * (py - closestY));
+}
+
+function circleSegmentCollision(circle, x1, y1, x2, y2) {
+  return distToSegment(circle.x, circle.y, x1, y1, x2, y2) <= circle.radius;
+}
+
 function rollDie(faces, rng) { return Math.floor(rng() * faces) + 1; }
 
 function angleToOffset(angleDeg, inches) {
@@ -107,9 +148,34 @@ function phaseDumbAnimals(state) {
     const { dx, dy } = angleToOffset(angle, roll);
     if (animal.type === 'herd') {
       const _hBefore = { x: s.herd.x, y: s.herd.y };
-      s.herd.x += dx; s.herd.y += dy;
+      const targetX = s.herd.x + dx;
+      const targetY = s.herd.y + dy;
+
+      // Check pen wall collision along the path
+      const walls = getPenWalls(s.pen);
+      let wallBlockDist = Infinity;
+      for (const wall of walls) {
+        const t = raySegmentIntersect(s.herd, { x: targetX, y: targetY }, wall[0], wall[1], wall[2], wall[3], s.herd.radius);
+        if (t !== null && t < wallBlockDist) {
+          wallBlockDist = t;
+        }
+      }
+
+      if (wallBlockDist < Infinity) {
+        // Stop just before hitting the wall
+        const dir = unitVector(s.herd, { x: targetX, y: targetY });
+        const stopDist = Math.max(0, wallBlockDist - 0.01);
+        s.herd.x += dir.x * stopDist;
+        s.herd.y += dir.y * stopDist;
+        console.log(`[dumbAnimals T${s.turn}] herd blocked by pen wall at dist=${wallBlockDist.toFixed(2)}", stopped at ${_pos(s.herd)}`);
+        events.push(`Dumb Animals: Herd bumped into pen wall.`);
+      } else {
+        s.herd.x = targetX;
+        s.herd.y = targetY;
+        events.push(`Dumb Animals: Herd wanders ${roll}" (${angle.toFixed(0)}°).`);
+      }
+
       console.log(`[dumbAnimals T${s.turn}] herd: roll=${roll} angle=${angle.toFixed(0)}° | (${_hBefore.x.toFixed(2)},${_hBefore.y.toFixed(2)}) → ${_pos(s.herd)}`);
-      events.push(`Dumb Animals: Herd wanders ${roll}" (${angle.toFixed(0)}°).`);
       if (touchesEdge(s.herd, boardSize)) {
         console.warn(`[dumbAnimals T${s.turn}] herd OOB at ${_pos(s.herd)} — clamping to board`);
         s.herd.x = Math.max(s.herd.radius, Math.min(boardSize - s.herd.radius, s.herd.x));
@@ -121,9 +187,34 @@ function phaseDumbAnimals(state) {
       const la = s.looseAnimals.find(a => a.id === animal.id);
       if (la) {
         const _laBefore = { x: la.x, y: la.y };
-        la.x += dx; la.y += dy;
+        const targetX = la.x + dx;
+        const targetY = la.y + dy;
+
+        // Check pen wall collision along the path
+        const walls = getPenWalls(s.pen);
+        let wallBlockDist = Infinity;
+        for (const wall of walls) {
+          const t = raySegmentIntersect(la, { x: targetX, y: targetY }, wall[0], wall[1], wall[2], wall[3], la.radius);
+          if (t !== null && t < wallBlockDist) {
+            wallBlockDist = t;
+          }
+        }
+
+        if (wallBlockDist < Infinity) {
+          // Stop just before hitting the wall
+          const dir = unitVector(la, { x: targetX, y: targetY });
+          const stopDist = Math.max(0, wallBlockDist - 0.01);
+          la.x += dir.x * stopDist;
+          la.y += dir.y * stopDist;
+          console.log(`[dumbAnimals T${s.turn}] ${la.id} blocked by pen wall at dist=${wallBlockDist.toFixed(2)}", stopped at ${_pos(la)}`);
+          events.push(`Dumb Animals: ${la.id} bumped into pen wall.`);
+        } else {
+          la.x = targetX;
+          la.y = targetY;
+          events.push(`Dumb Animals: ${la.id} wanders ${roll}".`);
+        }
+
         console.log(`[dumbAnimals T${s.turn}] ${la.id}: roll=${roll} angle=${angle.toFixed(0)}° | (${_laBefore.x.toFixed(2)},${_laBefore.y.toFixed(2)}) → ${_pos(la)}`);
-        events.push(`Dumb Animals: ${la.id} wanders ${roll}".`);
         if (touchesEdge(la, boardSize)) {
           console.warn(`[dumbAnimals T${s.turn}] ${la.id} OOB at ${_pos(la)} — marking escaped`);
           la._escaped = true; events.push(`${la.id} reached the edge and escaped!`);
@@ -160,6 +251,44 @@ function rayCircleIntersect(from, to, obstacle) {
   return null;
 }
 
+function raySegmentIntersect(from, to, x1, y1, x2, y2, radius) {
+  // Check if a circle moving from 'from' to 'to' hits the wall segment
+  const dx = to.x - from.x;
+  const dy = to.y - from.y;
+  const moveLen = Math.sqrt(dx*dx + dy*dy);
+  if (moveLen === 0) return null;
+
+  // Use fine-grained sampling for accuracy
+  const steps = Math.max(20, Math.ceil(moveLen * 10));
+  for (let i = 0; i <= steps; i++) {
+    const t = i / steps;
+    const px = from.x + dx * t;
+    const py = from.y + dy * t;
+    const d = distToSegment(px, py, x1, y1, x2, y2);
+    if (d <= radius) {
+      // Found collision - do binary search for more precision
+      const t0 = i > 0 ? (i-1)/steps : 0;
+      const t1 = t;
+
+      // Binary search between t0 and t1
+      let tMin = t0, tMax = t1;
+      for (let j = 0; j < 10; j++) {
+        const tMid = (tMin + tMax) / 2;
+        const pmx = from.x + dx * tMid;
+        const pmy = from.y + dy * tMid;
+        const dMid = distToSegment(pmx, pmy, x1, y1, x2, y2);
+        if (dMid <= radius) {
+          tMax = tMid;  // collision at or before midpoint
+        } else {
+          tMin = tMid;  // collision after midpoint
+        }
+      }
+      return tMax * moveLen;
+    }
+  }
+  return null;
+}
+
 function phaseComeBy(state, action) {
   const s = cloneState(state);
   const events = [];
@@ -177,13 +306,31 @@ function phaseComeBy(state, action) {
   const distance = dist(s.dog, target);
   console.log(`[comeBy T${s.turn}] target=(${target.x.toFixed(2)},${target.y.toFixed(2)}) dist=${distance.toFixed(2)}"${distance > DOG_MOVE_MAX ? ' ⚠ EXCEEDS MAX' : ''}`);
   if (distance > DOG_MOVE_MAX + 1e-9) throw new Error(`Move exceeds max ${DOG_MOVE_MAX}".`);
+  // Check for pen wall collisions
+  const walls = getPenWalls(s.pen);
+  let wallBlockDist = Infinity;
+  for (const wall of walls) {
+    const t = raySegmentIntersect(s.dog, target, wall[0], wall[1], wall[2], wall[3], s.dog.radius);
+    if (t !== null && t < wallBlockDist) {
+      wallBlockDist = t;
+    }
+  }
+
   const obstacles = [s.herd, ...s.looseAnimals];
   let closestBlock = Infinity, blockedEntity = null;
   for (const obs of obstacles) {
     const t = rayCircleIntersect(s.dog, target, obs);
     if (t !== null && t < closestBlock) { closestBlock = t; blockedEntity = obs; }
   }
-  if (blockedEntity !== null) {
+
+  // Use whichever blocker is closest
+  if (wallBlockDist < closestBlock) {
+    const dir = unitVector(s.dog, target);
+    const stopDist = Math.max(0, wallBlockDist - 0.01);
+    s.dog.x += dir.x * stopDist; s.dog.y += dir.y * stopDist;
+    console.log(`[comeBy T${s.turn}] dog blocked by pen wall at dist=${wallBlockDist.toFixed(2)}", stopped at ${_pos(s.dog)}`);
+    events.push(`Come-by: Dog blocked by pen wall, stopped at (${s.dog.x.toFixed(1)}, ${s.dog.y.toFixed(1)}).`);
+  } else if (blockedEntity !== null) {
     const dir = unitVector(s.dog, target);
     const stopDist = Math.max(0, closestBlock - 0.01);
     s.dog.x += dir.x * stopDist; s.dog.y += dir.y * stopDist;
@@ -272,11 +419,30 @@ function phaseMoveHerd(state) {
       }
       continue;
     }
+    // Check for pen wall collisions along the movement path
+    const walls = getPenWalls(s.pen);
+    let wallBlockDist = Infinity;
+    for (const wall of walls) {
+      const t = raySegmentIntersect(animal, { x: newX, y: newY }, wall[0], wall[1], wall[2], wall[3], animal.radius);
+      if (t !== null && t < wallBlockDist) {
+        wallBlockDist = t;
+      }
+    }
+    if (wallBlockDist < Infinity) {
+      // Stop just before hitting the wall
+      const dir = unitVector(animal, { x: newX, y: newY });
+      const stopDist = Math.max(0, wallBlockDist - 0.01);
+      newX = animal.x + dir.x * stopDist;
+      newY = animal.y + dir.y * stopDist;
+      console.log(`[moveHerd T${s.turn}] ${animal.id} blocked by pen wall at dist=${wallBlockDist.toFixed(2)}", stopped at (${newX.toFixed(2)},${newY.toFixed(2)})`);
+      events.push(`Move Herd: ${animal.id} blocked by pen wall.`);
+    }
+
     const others = [s.dog, s.herd, ...s.looseAnimals].filter(e => e.id !== animal.id && !escapedIds.has(e.id));
     let blocked = false;
     for (const other of others) {
-      const testPos = { x: newX, y: newY, radius: animal.radius };
-      if (entitiesContact(testPos, other)) {
+      const testPos2 = { x: newX, y: newY, radius: animal.radius };
+      if (entitiesContact(testPos2, other)) {
         const stopDist = Math.max(0, dist(animal, other) - animal.radius - other.radius - 0.01);
         newX = animal.x + dir.x * stopDist; newY = animal.y + dir.y * stopDist;
         console.log(`[moveHerd T${s.turn}] ${animal.id} blocked by ${other.id}, stopping at (${newX.toFixed(2)},${newY.toFixed(2)})`);
@@ -355,7 +521,7 @@ const WALK_UP = {
   boardSize: 24,
   dog:  { id: 'dog',  type: 'dog',  x: 1,  y: 22, radius: TOKEN_RADIUS },
   herd: { id: 'herd', type: 'herd', x: 6,  y: 10, radius: HERD_RADIUS  },
-  pen:  { id: 'pen',  type: 'pen',  x: 18, y: 10, w: 8, h: 6          },
+  pen:  { id: 'pen',  type: 'pen',  x: 18, y: 10, w: 8, h: 6, openSide: 'left' },
   looseAnimals: [],
   escapedCount: 0,
   events: [],
@@ -425,14 +591,54 @@ function RulerLayer() {
 function PenEntity({ pen }) {
   const cx=toPx(pen.x), cy=toPx(pen.y), w=toPx(pen.w), h=toPx(pen.h);
   const x = cx - w/2, y = cy - h/2;
+
+  // Determine which sides have solid walls
+  const hasLeftWall = pen.openSide !== 'left';
+  const hasRightWall = pen.openSide !== 'right';
+  const hasTopWall = pen.openSide !== 'top';
+  const hasBottomWall = pen.openSide !== 'bottom';
+
   return (
     <g>
-      <rect x={x} y={y} width={w} height={h} fill="#ede4c8" stroke="#7a5a38"
-        strokeWidth={1.5} strokeDasharray="6,3" opacity={0.85}/>
-      <line x1={x} y1={y} x2={x+w} y2={y+h}
-        stroke="#7a5a38" strokeWidth={1} opacity={0.25}/>
-      <line x1={x+w} y1={y} x2={x} y2={y+h}
-        stroke="#7a5a38" strokeWidth={1} opacity={0.25}/>
+      {/* Floor area */}
+      <rect x={x} y={y} width={w} height={h} fill="#ede4c8" opacity={0.85}/>
+
+      {/* Solid walls (thick brown lines) */}
+      {hasLeftWall && (
+        <line x1={x} y1={y} x2={x} y2={y+h}
+          stroke="#5a4a28" strokeWidth={3} opacity={0.95}/>
+      )}
+      {hasRightWall && (
+        <line x1={x+w} y1={y} x2={x+w} y2={y+h}
+          stroke="#5a4a28" strokeWidth={3} opacity={0.95}/>
+      )}
+      {hasTopWall && (
+        <line x1={x} y1={y} x2={x+w} y2={y}
+          stroke="#5a4a28" strokeWidth={3} opacity={0.95}/>
+      )}
+      {hasBottomWall && (
+        <line x1={x} y1={y+h} x2={x+w} y2={y+h}
+          stroke="#5a4a28" strokeWidth={3} opacity={0.95}/>
+      )}
+
+      {/* Open side (dashed line) */}
+      {!hasLeftWall && (
+        <line x1={x} y1={y} x2={x} y2={y+h}
+          stroke="#7a5a38" strokeWidth={1.5} strokeDasharray="6,3" opacity={0.5}/>
+      )}
+      {!hasRightWall && (
+        <line x1={x+w} y1={y} x2={x+w} y2={y+h}
+          stroke="#7a5a38" strokeWidth={1.5} strokeDasharray="6,3" opacity={0.5}/>
+      )}
+      {!hasTopWall && (
+        <line x1={x} y1={y} x2={x+w} y2={y}
+          stroke="#7a5a38" strokeWidth={1.5} strokeDasharray="6,3" opacity={0.5}/>
+      )}
+      {!hasBottomWall && (
+        <line x1={x} y1={y+h} x2={x+w} y2={y+h}
+          stroke="#7a5a38" strokeWidth={1.5} strokeDasharray="6,3" opacity={0.5}/>
+      )}
+
       <text x={cx} y={cy+h/2+14} textAnchor="middle"
         fontSize={10} fontFamily="monospace" fontWeight="600"
         fill="#7a5a38" letterSpacing={1}>PEN</text>

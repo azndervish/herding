@@ -35,7 +35,7 @@ The engine and the React layer are intentionally kept separate within the same f
 - Board is **24" × 24"** (inches), origin top-left.
 - All positions are in **game-inches** (not pixels). SVG rendering converts via `toPx(inches)`.
 - Most entities are circles: `{ id, type, x, y, radius }`.
-- Pen is a rectangle: `{ id, type, x, y, w, h }` where (x, y) is the center.
+- Pen is a rectangle with walls: `{ id, type, x, y, w, h, openSide }` where (x, y) is the center and `openSide` specifies which side is open ('left', 'right', 'top', or 'bottom').
 
 ### Entity types
 
@@ -44,7 +44,7 @@ The engine and the React layer are intentionally kept separate within the same f
 | `dog` | circle | `TOKEN_RADIUS = 0.75` | Player-controlled |
 | `herd` | circle | `HERD_RADIUS = 2.5` | 5" diameter template |
 | `loose` | circle | `TOKEN_RADIUS = 0.75` | Escaped animals |
-| `pen` | rectangle | defined per scenario | Goal zone |
+| `pen` | rectangle with 3 walls | defined per scenario | Goal zone with solid walls on 3 sides |
 
 ### Game state shape
 
@@ -56,7 +56,7 @@ The engine and the React layer are intentionally kept separate within the same f
   dog:          { id, type, x, y, radius },
   herd:         { id, type, x, y, radius },
   looseAnimals: [{ id, type, x, y, radius }, ...],
-  pen:          { id, type, x, y, w, h },
+  pen:          { id, type, x, y, w, h, openSide },
   escapedCount: number,
   events:       string[],   // log messages, newest appended last
   rng:          () => number, // injectable — Math.random in production
@@ -170,7 +170,16 @@ const SCENARIOS = [
 
 Each scenario `state` object follows the full game state shape (minus `rng`, which is injected as `Math.random` at runtime).
 
-**Current scenarios:** Walk Up — dog starts bottom-left, herd near centre-left, large pen on the right.
+**Current scenarios:** Walk Up — dog starts bottom-left, herd near centre-left, pen (8"×6") on the right with solid walls on top/right/bottom and open on the left side for entry.
+
+### Pen Wall Collision
+
+Pen walls are impassable barriers that block all entity movement:
+- Walls are defined by the `openSide` property ('left', 'right', 'top', 'bottom')
+- Three sides have solid walls; one side is open for entry
+- `raySegmentIntersect` uses fine-grained sampling (10 samples per inch) with binary search refinement for <0.01" precision
+- Entities stop with ~0.01" buffer before touching walls
+- Visual circles have 2px stroke width, adding ~0.05" visual overhang beyond collision radius
 
 ---
 
