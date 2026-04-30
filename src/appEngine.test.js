@@ -35,12 +35,14 @@ import {
   rollDie,
   angleToOffset,
   cloneState,
+  getTerrainEdges,
   phaseDumbAnimals,
   phaseComeBy,
   phaseLooseAnimal,
   phaseMoveHerd,
   processTurn,
   WALK_UP,
+  ROTTEN_BRIDGE,
 } from './appEngine.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -69,6 +71,7 @@ function makeState(overrides = {}) {
     herd: { id: 'herd', type: 'herd', x: 12, y: 6,  radius: HERD_RADIUS  },
     pen:  { id: 'pen',  type: 'pen',  x: 22, y: 22, w: 5, h: 5, openSide: 'left' },
     looseAnimals: [],
+    terrain: [],
     ...overrides,
   };
 }
@@ -885,5 +888,238 @@ describe('WALK_UP scenario', () => {
     // The game either finished or ran stably for 50 turns without throwing
     assert.ok(s.phase === 'finished' || turns === 50);
     assert.ok(typeof s.escapedCount === 'number');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Terrain
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('getTerrainEdges', () => {
+  it('returns empty array for empty terrain', () => {
+    const edges = getTerrainEdges([]);
+    assert.equal(edges.length, 0);
+  });
+
+  it('returns 4 edges for one impassable terrain rectangle', () => {
+    const terrain = [{ id: 'water', type: 'impassable', x: 12, y: 12, w: 4, h: 2 }];
+    const edges = getTerrainEdges(terrain);
+    assert.equal(edges.length, 4);
+    // Check edges are line segments [x1, y1, x2, y2]
+    edges.forEach(edge => {
+      assert.equal(edge.length, 4);
+      edge.forEach(coord => assert.equal(typeof coord, 'number'));
+    });
+  });
+
+  it('ignores non-impassable terrain types', () => {
+    const terrain = [
+      { id: 'grass', type: 'passable', x: 12, y: 12, w: 4, h: 2 },
+      { id: 'water', type: 'impassable', x: 6, y: 6, w: 2, h: 2 },
+    ];
+    const edges = getTerrainEdges(terrain);
+    assert.equal(edges.length, 4); // only water produces edges
+  });
+
+  it('returns correct edge coordinates for centered rectangle', () => {
+    // 2x2 rectangle centered at (10, 10) → left=9, right=11, top=9, bottom=11
+    const terrain = [{ id: 'water', type: 'impassable', x: 10, y: 10, w: 2, h: 2 }];
+    const edges = getTerrainEdges(terrain);
+
+    // Should contain top, right, bottom, left edges
+    const topEdge = edges.find(e => e[1] === 9 && e[3] === 9); // y1=9, y2=9
+    const bottomEdge = edges.find(e => e[1] === 11 && e[3] === 11); // y1=11, y2=11
+    const leftEdge = edges.find(e => e[0] === 9 && e[2] === 9); // x1=9, x2=9
+    const rightEdge = edges.find(e => e[0] === 11 && e[2] === 11); // x1=11, x2=11
+
+    assert.ok(topEdge, 'should have top edge');
+    assert.ok(bottomEdge, 'should have bottom edge');
+    assert.ok(leftEdge, 'should have left edge');
+    assert.ok(rightEdge, 'should have right edge');
+  });
+});
+
+describe('Terrain collision in phaseDumbAnimals', () => {
+  it('herd stops when hitting impassable terrain', () => {
+    // Herd at (4, 10), terrain wall left edge at x=8
+    // RNG: fixedRng(0) → roll=1, angle=0° → moves 1" at 0° (east: +1x, +0y)
+    // Target: (5, 10) - no collision, moves freely
+    // Use fixedRng(0.5) → roll=4, angle=180° to move west, or position to force collision
+    const terrain = [{ id: 'wall', type: 'impassable', x: 9, y: 10, w: 2, h: 4 }]; // wall left edge at x=8
+    const s = makeState({
+      herd: { id: 'herd', type: 'herd', x: 4, y: 10, radius: HERD_RADIUS },
+      terrain,
+      rng: seqRng(0.9999, 0), // roll=6, angle=0° → moves 6" east from (4,10) to (10,10), hits terrain at x=8
+    });
+
+    const next = phaseDumbAnimals(s);
+
+    // Herd should move toward wall but stop before hitting
+    assert.ok(next.herd.x > 4, 'herd should move east');
+    assert.ok(next.herd.x < 8 - HERD_RADIUS, 'herd should stop before terrain wall');
+    assert.ok(next.events.some(e => e.includes('impassable terrain')), 'should log terrain collision');
+  });
+
+  it('loose animal stops when hitting impassable terrain', () => {
+    const terrain = [{ id: 'water', type: 'impassable', x: 15, y: 12, w: 2, h: 4 }]; // wall left edge at x=14
+    const looseAnimals = [{ id: 'la1', type: 'loose', x: 12, y: 12, radius: TOKEN_RADIUS }];
+    const s = makeState({
+      looseAnimals,
+      terrain,
+      rng: fixedRng(0), // roll=1, angle=0° → moves 1" east
+    });
+
+    const next = phaseDumbAnimals(s);
+
+    assert.ok(next.looseAnimals[0].x > 12, 'loose animal should move east');
+    assert.ok(next.looseAnimals[0].x < 14 - TOKEN_RADIUS, 'loose animal should stop before terrain');
+  });
+
+  it('herd moves freely when no terrain in path', () => {
+    const terrain = [{ id: 'far_water', type: 'impassable', x: 20, y: 20, w: 2, h: 2 }];
+    const s = makeState({
+      herd: { id: 'herd', type: 'herd', x: 6, y: 10, radius: HERD_RADIUS },
+      terrain,
+      rng: fixedRng(0), // roll=1, angle=0° → moves 1" east to (7, 10)
+    });
+
+    const next = phaseDumbAnimals(s);
+
+    // Should move full distance since terrain is far away
+    assert.ok(Math.abs(next.herd.x - 7) < 0.1, 'herd should reach target position');
+    assert.ok(!next.events.some(e => e.includes('terrain')), 'should not mention terrain');
+  });
+});
+
+describe('Terrain collision in phaseComeBy', () => {
+  it('dog stops when hitting impassable terrain', () => {
+    const terrain = [{ id: 'river', type: 'impassable', x: 10, y: 12, w: 2, h: 4 }]; // wall left edge at x=9
+    const s = makeState({
+      phase: 'come_by',
+      dog: { id: 'dog', type: 'dog', x: 6, y: 12, radius: TOKEN_RADIUS },
+      terrain,
+    });
+
+    const action = { type: 'move_dog', x: 12, y: 12 }; // Try to move east through terrain
+    const next = phaseComeBy(s, action);
+
+    assert.ok(next.dog.x > 6, 'dog should move east');
+    assert.ok(next.dog.x < 9 - TOKEN_RADIUS, 'dog should stop before terrain');
+    assert.ok(next.events.some(e => e.includes('impassable terrain')), 'should log terrain collision');
+  });
+
+  it('dog moves freely when terrain not in path', () => {
+    const terrain = [{ id: 'river', type: 'impassable', x: 20, y: 20, w: 2, h: 2 }];
+    const s = makeState({
+      phase: 'come_by',
+      dog: { id: 'dog', type: 'dog', x: 6, y: 12, radius: TOKEN_RADIUS },
+      terrain,
+    });
+
+    const action = { type: 'move_dog', x: 10, y: 12 };
+    const next = phaseComeBy(s, action);
+
+    assert.ok(Math.abs(next.dog.x - 10) < 0.1, 'dog should reach target');
+    assert.ok(!next.events.some(e => e.includes('terrain')), 'should not mention terrain');
+  });
+
+  it('dog prefers closer obstacle (terrain over pen wall)', () => {
+    const terrain = [{ id: 'near', type: 'impassable', x: 8, y: 12, w: 2, h: 4 }]; // left edge at x=7
+    const s = makeState({
+      phase: 'come_by',
+      dog: { id: 'dog', type: 'dog', x: 4, y: 12, radius: TOKEN_RADIUS },
+      pen: { id: 'pen', type: 'pen', x: 15, y: 12, w: 4, h: 4, openSide: 'left' }, // farther away
+      terrain,
+    });
+
+    const action = { type: 'move_dog', x: 12, y: 12 };
+    const next = phaseComeBy(s, action);
+
+    assert.ok(next.events.some(e => e.includes('impassable terrain')), 'should stop at terrain, not pen');
+  });
+});
+
+describe('Terrain collision in phaseMoveHerd', () => {
+  it('herd stops at terrain when pushed by dog', () => {
+    const terrain = [{ id: 'wall', type: 'impassable', x: 11, y: 6, w: 2, h: 4 }]; // left edge at x=10
+    const s = makeState({
+      phase: 'move_herd',
+      dog: { id: 'dog', type: 'dog', x: 2, y: 6, radius: TOKEN_RADIUS },
+      herd: { id: 'herd', type: 'herd', x: 6, y: 6, radius: HERD_RADIUS }, // 4" from dog, needs to be pushed to 12" (8" more) but hits terrain
+      terrain,
+    });
+
+    const next = phaseMoveHerd(s);
+
+    // Dog is 4" from herd, needs 10" clearance → herd pushed 6" east, hits terrain at x=10
+    assert.ok(next.herd.x > 6, 'herd should be pushed east');
+    assert.ok(next.herd.x <= 10 - HERD_RADIUS, 'herd should stop before or at terrain wall');
+    assert.ok(next.events.some(e => e.includes('impassable terrain')), 'should log terrain collision');
+  });
+
+  it('loose animal stops at terrain when pushed by dog', () => {
+    const terrain = [{ id: 'river', type: 'impassable', x: 16, y: 12, w: 2, h: 4 }]; // left edge at x=15
+    const looseAnimals = [{ id: 'la1', type: 'loose', x: 13, y: 12, radius: TOKEN_RADIUS }];
+    const s = makeState({
+      phase: 'move_herd',
+      dog: { id: 'dog', type: 'dog', x: 8, y: 12, radius: TOKEN_RADIUS },
+      looseAnimals,
+      terrain,
+    });
+
+    const next = phaseMoveHerd(s);
+
+    assert.ok(next.looseAnimals[0].x > 13, 'loose animal should be pushed east');
+    assert.ok(next.looseAnimals[0].x < 15 - TOKEN_RADIUS, 'loose animal should stop before terrain');
+  });
+});
+
+describe('ROTTEN_BRIDGE scenario', () => {
+  it('has correct structure', () => {
+    assert.equal(ROTTEN_BRIDGE.boardSize, 24);
+    assert.equal(ROTTEN_BRIDGE.phase, 'deployment');
+    assert.equal(ROTTEN_BRIDGE.pen.openSide, 'bottom');
+    assert.ok(Array.isArray(ROTTEN_BRIDGE.terrain), 'should have terrain array');
+  });
+
+  it('has two impassable river sections', () => {
+    const rivers = ROTTEN_BRIDGE.terrain.filter(t => t.type === 'impassable');
+    assert.equal(rivers.length, 2, 'should have 2 river sections');
+
+    // Both should be 2" wide, 8" tall (vertical rivers)
+    rivers.forEach(r => {
+      assert.equal(r.w, 2, 'river should be 2" wide');
+      assert.equal(r.h, 8, 'river should be 8" tall');
+    });
+  });
+
+  it('rivers are positioned with 8" gap for crossing', () => {
+    const rivers = ROTTEN_BRIDGE.terrain.filter(t => t.type === 'impassable');
+    const topRiver = rivers.find(r => r.y < 12);
+    const bottomRiver = rivers.find(r => r.y > 12);
+
+    assert.ok(topRiver, 'should have top river');
+    assert.ok(bottomRiver, 'should have bottom river');
+
+    // Top river bottom edge: y + h/2 = 4 + 4 = 8
+    // Bottom river top edge: y - h/2 = 20 - 4 = 16
+    // Gap: 16 - 8 = 8"
+    const topBottom = topRiver.y + topRiver.h/2;
+    const bottomTop = bottomRiver.y - bottomRiver.h/2;
+    const gap = bottomTop - topBottom;
+
+    assert.equal(gap, 8, `gap should be exactly 8", got ${gap}"`);
+  });
+
+  it('pen is positioned 2" from right edge, 0" from top', () => {
+    // Pen center at x=18, width=8 → right edge at x=22
+    // Distance from board right edge (24): 24-22 = 2"
+    const penRight = ROTTEN_BRIDGE.pen.x + ROTTEN_BRIDGE.pen.w/2;
+    const distFromRight = 24 - penRight;
+    assert.ok(Math.abs(distFromRight - 2) < 0.1, `pen should be 2" from right edge, got ${distFromRight}"`);
+
+    // Pen center at y=4, height=8 → top edge at y=0
+    const penTop = ROTTEN_BRIDGE.pen.y - ROTTEN_BRIDGE.pen.h/2;
+    assert.ok(Math.abs(penTop - 0) < 0.1, `pen should be 0" from top edge, got ${penTop}"`);
   });
 });

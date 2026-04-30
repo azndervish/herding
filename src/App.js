@@ -94,7 +94,27 @@ function cloneState(s) {
     looseAnimals: s.looseAnimals.map(a => ({ ...a })),
     pen: { ...s.pen },
     events: [...s.events],
+    terrain: s.terrain ? s.terrain.map(t => ({ ...t })) : [],
   };
+}
+
+function getTerrainEdges(terrain) {
+  // Returns array of line segments [x1, y1, x2, y2] for all terrain edges
+  const edges = [];
+  for (const t of terrain) {
+    if (t.type !== 'impassable') continue;
+    const left = t.x - t.w/2;
+    const right = t.x + t.w/2;
+    const top = t.y - t.h/2;
+    const bottom = t.y + t.h/2;
+    edges.push(
+      [left, top, right, top],       // top edge
+      [right, top, right, bottom],   // right edge
+      [left, bottom, right, bottom], // bottom edge
+      [left, top, left, bottom]      // left edge
+    );
+  }
+  return edges;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -161,14 +181,27 @@ function phaseDumbAnimals(state) {
         }
       }
 
-      if (wallBlockDist < Infinity) {
-        // Stop just before hitting the wall
+      // Check terrain collision along the path
+      const terrainEdges = getTerrainEdges(s.terrain || []);
+      let terrainBlockDist = Infinity;
+      for (const edge of terrainEdges) {
+        const t = raySegmentIntersect(s.herd, { x: targetX, y: targetY }, edge[0], edge[1], edge[2], edge[3], s.herd.radius);
+        if (t !== null && t < terrainBlockDist) {
+          terrainBlockDist = t;
+        }
+      }
+
+      const blockDist = Math.min(wallBlockDist, terrainBlockDist);
+
+      if (blockDist < Infinity) {
+        // Stop just before hitting the obstacle
         const dir = unitVector(s.herd, { x: targetX, y: targetY });
-        const stopDist = Math.max(0, wallBlockDist - 0.01);
+        const stopDist = Math.max(0, blockDist - 0.01);
         s.herd.x += dir.x * stopDist;
         s.herd.y += dir.y * stopDist;
-        console.log(`[dumbAnimals T${s.turn}] herd blocked by pen wall at dist=${wallBlockDist.toFixed(2)}", stopped at ${_pos(s.herd)}`);
-        events.push(`Dumb Animals: Herd bumped into pen wall.`);
+        const obstacle = terrainBlockDist < wallBlockDist ? 'impassable terrain' : 'pen wall';
+        console.log(`[dumbAnimals T${s.turn}] herd blocked by ${obstacle} at dist=${blockDist.toFixed(2)}", stopped at ${_pos(s.herd)}`);
+        events.push(`Dumb Animals: Herd bumped into ${obstacle}.`);
       } else {
         s.herd.x = targetX;
         s.herd.y = targetY;
@@ -200,14 +233,27 @@ function phaseDumbAnimals(state) {
           }
         }
 
-        if (wallBlockDist < Infinity) {
-          // Stop just before hitting the wall
+        // Check terrain collision along the path
+        const terrainEdges = getTerrainEdges(s.terrain || []);
+        let terrainBlockDist = Infinity;
+        for (const edge of terrainEdges) {
+          const t = raySegmentIntersect(la, { x: targetX, y: targetY }, edge[0], edge[1], edge[2], edge[3], la.radius);
+          if (t !== null && t < terrainBlockDist) {
+            terrainBlockDist = t;
+          }
+        }
+
+        const blockDist = Math.min(wallBlockDist, terrainBlockDist);
+
+        if (blockDist < Infinity) {
+          // Stop just before hitting the obstacle
           const dir = unitVector(la, { x: targetX, y: targetY });
-          const stopDist = Math.max(0, wallBlockDist - 0.01);
+          const stopDist = Math.max(0, blockDist - 0.01);
           la.x += dir.x * stopDist;
           la.y += dir.y * stopDist;
-          console.log(`[dumbAnimals T${s.turn}] ${la.id} blocked by pen wall at dist=${wallBlockDist.toFixed(2)}", stopped at ${_pos(la)}`);
-          events.push(`Dumb Animals: ${la.id} bumped into pen wall.`);
+          const obstacle = terrainBlockDist < wallBlockDist ? 'impassable terrain' : 'pen wall';
+          console.log(`[dumbAnimals T${s.turn}] ${la.id} blocked by ${obstacle} at dist=${blockDist.toFixed(2)}", stopped at ${_pos(la)}`);
+          events.push(`Dumb Animals: ${la.id} bumped into ${obstacle}.`);
         } else {
           la.x = targetX;
           la.y = targetY;
@@ -316,6 +362,16 @@ function phaseComeBy(state, action) {
     }
   }
 
+  // Check terrain collision along the path
+  const terrainEdges = getTerrainEdges(s.terrain || []);
+  let terrainBlockDist = Infinity;
+  for (const edge of terrainEdges) {
+    const t = raySegmentIntersect(s.dog, target, edge[0], edge[1], edge[2], edge[3], s.dog.radius);
+    if (t !== null && t < terrainBlockDist) {
+      terrainBlockDist = t;
+    }
+  }
+
   const obstacles = [s.herd, ...s.looseAnimals];
   let closestBlock = Infinity, blockedEntity = null;
   for (const obs of obstacles) {
@@ -324,18 +380,20 @@ function phaseComeBy(state, action) {
   }
 
   // Use whichever blocker is closest
-  if (wallBlockDist < closestBlock) {
+  const blockDist = Math.min(wallBlockDist, terrainBlockDist, closestBlock);
+
+  if (blockDist < Infinity) {
     const dir = unitVector(s.dog, target);
-    const stopDist = Math.max(0, wallBlockDist - 0.01);
+    const stopDist = Math.max(0, blockDist - 0.01);
     s.dog.x += dir.x * stopDist; s.dog.y += dir.y * stopDist;
-    console.log(`[comeBy T${s.turn}] dog blocked by pen wall at dist=${wallBlockDist.toFixed(2)}", stopped at ${_pos(s.dog)}`);
-    events.push(`Come-by: Dog blocked by pen wall, stopped at (${s.dog.x.toFixed(1)}, ${s.dog.y.toFixed(1)}).`);
-  } else if (blockedEntity !== null) {
-    const dir = unitVector(s.dog, target);
-    const stopDist = Math.max(0, closestBlock - 0.01);
-    s.dog.x += dir.x * stopDist; s.dog.y += dir.y * stopDist;
-    console.log(`[comeBy T${s.turn}] dog blocked by ${blockedEntity.id} at dist=${closestBlock.toFixed(2)}", stopped at ${_pos(s.dog)}`);
-    events.push(`Come-by: Dog blocked by ${blockedEntity.id}, stopped at (${s.dog.x.toFixed(1)}, ${s.dog.y.toFixed(1)}).`);
+
+    let obstacle = 'unknown';
+    if (terrainBlockDist === blockDist) obstacle = 'impassable terrain';
+    else if (wallBlockDist === blockDist) obstacle = 'pen wall';
+    else obstacle = blockedEntity.id;
+
+    console.log(`[comeBy T${s.turn}] dog blocked by ${obstacle} at dist=${blockDist.toFixed(2)}", stopped at ${_pos(s.dog)}`);
+    events.push(`Come-by: Dog blocked by ${obstacle}, stopped at (${s.dog.x.toFixed(1)}, ${s.dog.y.toFixed(1)}).`);
   } else {
     s.dog.x = target.x; s.dog.y = target.y;
     console.log(`[comeBy T${s.turn}] dog moved to ${_pos(s.dog)}`);
@@ -428,14 +486,28 @@ function phaseMoveHerd(state) {
         wallBlockDist = t;
       }
     }
-    if (wallBlockDist < Infinity) {
-      // Stop just before hitting the wall
+
+    // Check terrain collision along the path
+    const terrainEdges = getTerrainEdges(s.terrain || []);
+    let terrainBlockDist = Infinity;
+    for (const edge of terrainEdges) {
+      const t = raySegmentIntersect(animal, { x: newX, y: newY }, edge[0], edge[1], edge[2], edge[3], animal.radius);
+      if (t !== null && t < terrainBlockDist) {
+        terrainBlockDist = t;
+      }
+    }
+
+    const blockDist = Math.min(wallBlockDist, terrainBlockDist);
+
+    if (blockDist < Infinity) {
+      // Stop just before hitting the obstacle
       const dir = unitVector(animal, { x: newX, y: newY });
-      const stopDist = Math.max(0, wallBlockDist - 0.01);
+      const stopDist = Math.max(0, blockDist - 0.01);
       newX = animal.x + dir.x * stopDist;
       newY = animal.y + dir.y * stopDist;
-      console.log(`[moveHerd T${s.turn}] ${animal.id} blocked by pen wall at dist=${wallBlockDist.toFixed(2)}", stopped at (${newX.toFixed(2)},${newY.toFixed(2)})`);
-      events.push(`Move Herd: ${animal.id} blocked by pen wall.`);
+      const obstacle = terrainBlockDist < wallBlockDist ? 'impassable terrain' : 'pen wall';
+      console.log(`[moveHerd T${s.turn}] ${animal.id} blocked by ${obstacle} at dist=${blockDist.toFixed(2)}", stopped at (${newX.toFixed(2)},${newY.toFixed(2)})`);
+      events.push(`Move Herd: ${animal.id} blocked by ${obstacle}.`);
     }
 
     const others = [s.dog, s.herd, ...s.looseAnimals].filter(e => e.id !== animal.id && !escapedIds.has(e.id));
@@ -562,11 +634,30 @@ const WALK_UP = {
   events: [],
   turn: 1,
   phase: 'deployment',
+  terrain: [],
+  rng: Math.random,
+};
+
+const ROTTEN_BRIDGE = {
+  boardSize: 24,
+  dog:  { id: 'dog',  type: 'dog',  x: 1,  y: 12, radius: TOKEN_RADIUS },
+  herd: { id: 'herd', type: 'herd', x: 6,  y: 12, radius: HERD_RADIUS  },
+  pen:  { id: 'pen',  type: 'pen',  x: 22 - 4, y: 4, w: 8, h: 8, openSide: 'bottom' }, // 2" from right edge, 0" from top
+  looseAnimals: [],
+  escapedCount: 0,
+  events: [],
+  turn: 1,
+  phase: 'deployment',
+  terrain: [
+    { id: 'river_top', type: 'impassable', x: 12, y: 4, w: 2, h: 8 },     // Top river: 2" wide, 8" tall (vertical)
+    { id: 'river_bottom', type: 'impassable', x: 12, y: 20, w: 2, h: 8 }, // Bottom river: 2" wide, 8" tall (vertical)
+  ],
   rng: Math.random,
 };
 
 const SCENARIOS = [
   { id: 'walk_up', name: 'Walk Up', state: WALK_UP },
+  { id: 'rotten_bridge', name: 'Rotten Bridge', state: ROTTEN_BRIDGE },
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -577,29 +668,55 @@ const BOARD_PX = 480;
 
 function toPx(inches) { return (inches / 24) * BOARD_PX; }
 
-function TerrainLayer() {
+function TerrainLayer({ terrain = [] }) {
   return (
-    <g opacity="0.9">
-      {/* Grass patches */}
-      {[
-        {cx:3,  cy:19, rx:3,   ry:2,   rot:-8,  fill:"#cdd89a"},
-        {cx:20, cy:4,  rx:3.5, ry:2.2, rot:12,  fill:"#c5d490"},
-        {cx:20, cy:20, rx:2.5, ry:1.8, rot:5,   fill:"#cdd89a"},
-        {cx:10, cy:3,  rx:2.8, ry:1.6, rot:-15, fill:"#c5d490"},
-        {cx:3,  cy:6,  rx:2,   ry:1.5, rot:10,  fill:"#cdd89a"},
-      ].map((p,i) => (
-        <ellipse key={i} cx={toPx(p.cx)} cy={toPx(p.cy)} rx={toPx(p.rx)} ry={toPx(p.ry)}
-          transform={`rotate(${p.rot},${toPx(p.cx)},${toPx(p.cy)})`}
-          fill={p.fill} stroke="#a8b870" strokeWidth={0.8} opacity={0.35} />
-      ))}
-      {/* Grass blades */}
-      {Array.from({length:22},(_,i)=>({
-        x:(Math.sin(i*6.1)*0.5+0.5)*22+1,
-        y:(Math.cos(i*3.9)*0.5+0.5)*22+1,
-      })).map((b,i)=>(
-        <line key={i} x1={toPx(b.x)} y1={toPx(b.y)} x2={toPx(b.x+0.12)} y2={toPx(b.y-0.45)}
-          stroke="#849858" strokeWidth={1.1} opacity={0.3} />
-      ))}
+    <g>
+      {/* Impassable terrain (water) */}
+      {terrain.filter(t => t.type === 'impassable').map(t => {
+        const left = toPx(t.x - t.w/2);
+        const top = toPx(t.y - t.h/2);
+        const width = toPx(t.w);
+        const height = toPx(t.h);
+        return (
+          <g key={t.id}>
+            <rect x={left} y={top} width={width} height={height}
+              fill="#5a8ab8" opacity={0.6} />
+            <rect x={left} y={top} width={width} height={height}
+              fill="none" stroke="#3a6a98" strokeWidth={2} />
+            {/* Water ripples */}
+            {[0.25, 0.5, 0.75].map((ry, i) => (
+              <line key={i}
+                x1={left + 4} y1={top + height * ry}
+                x2={left + width - 4} y2={top + height * ry}
+                stroke="#7aa8d8" strokeWidth={1.5} opacity={0.4}
+                strokeDasharray="8,6" />
+            ))}
+          </g>
+        );
+      })}
+
+      {/* Decorative grass patches */}
+      <g opacity="0.9">
+        {[
+          {cx:3,  cy:19, rx:3,   ry:2,   rot:-8,  fill:"#cdd89a"},
+          {cx:20, cy:4,  rx:3.5, ry:2.2, rot:12,  fill:"#c5d490"},
+          {cx:20, cy:20, rx:2.5, ry:1.8, rot:5,   fill:"#cdd89a"},
+          {cx:10, cy:3,  rx:2.8, ry:1.6, rot:-15, fill:"#c5d490"},
+          {cx:3,  cy:6,  rx:2,   ry:1.5, rot:10,  fill:"#cdd89a"},
+        ].map((p,i) => (
+          <ellipse key={i} cx={toPx(p.cx)} cy={toPx(p.cy)} rx={toPx(p.rx)} ry={toPx(p.ry)}
+            transform={`rotate(${p.rot},${toPx(p.cx)},${toPx(p.cy)})`}
+            fill={p.fill} stroke="#a8b870" strokeWidth={0.8} opacity={0.35} />
+        ))}
+        {/* Grass blades */}
+        {Array.from({length:22},(_,i)=>({
+          x:(Math.sin(i*6.1)*0.5+0.5)*22+1,
+          y:(Math.cos(i*3.9)*0.5+0.5)*22+1,
+        })).map((b,i)=>(
+          <line key={i} x1={toPx(b.x)} y1={toPx(b.y)} x2={toPx(b.x+0.12)} y2={toPx(b.y-0.45)}
+            stroke="#849858" strokeWidth={1.1} opacity={0.3} />
+        ))}
+      </g>
     </g>
   );
 }
@@ -1351,7 +1468,7 @@ export default function App() {
           <rect x={1} y={1} width={BOARD_PX-2} height={BOARD_PX-2}
             fill="none" stroke="#8a7a5a" strokeWidth={2}/>
 
-          <TerrainLayer/>
+          <TerrainLayer terrain={gameState.terrain}/>
           <RulerLayer/>
           <PenEntity pen={pen}/>
           <SpookRing dog={dog}/>
