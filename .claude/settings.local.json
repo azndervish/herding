@@ -1,7 +1,8 @@
 {
   "permissions": {
     "allow": [
-      "Bash(node --experimental-vm-modules appEngine.test.js)"
+      "Bash(node --experimental-vm-modules appEngine.test.js)",
+      "Bash(node --experimental-vm-modules src/appEngine.test.js)"
     ]
   }
 }

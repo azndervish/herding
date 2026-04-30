@@ -481,7 +481,42 @@ function phaseMoveHerd(state) {
   return s;
 }
 
+function phaseDeployment(state, action) {
+  const s = cloneState(state);
+  const events = [];
+
+  console.log(`[deployment T${s.turn}] entry — action=${JSON.stringify(action)}`);
+
+  if (!action || action.type !== 'deploy_dog') {
+    throw new Error('deployment phase requires deploy_dog action');
+  }
+
+  const target = { x: action.x, y: action.y };
+
+  // Validate deployment zone: within 2" of left edge
+  if (target.x > 2 + s.dog.radius) {
+    throw new Error(`Dog must be deployed within 2" of left edge. Target x=${target.x.toFixed(2)}" exceeds ${(2 + s.dog.radius).toFixed(2)}"`);
+  }
+
+  // Validate within board bounds
+  if (target.x < s.dog.radius || target.y < s.dog.radius ||
+      target.x > s.boardSize - s.dog.radius || target.y > s.boardSize - s.dog.radius) {
+    throw new Error('Dog deployment must be within board bounds');
+  }
+
+  s.dog.x = target.x;
+  s.dog.y = target.y;
+  console.log(`[deployment T${s.turn}] dog deployed at ${_pos(s.dog)}`);
+  events.push(`Deployment: Dog placed at (${s.dog.x.toFixed(1)}, ${s.dog.y.toFixed(1)}).`);
+
+  s.events = [...s.events, ...events];
+  s.phase = 'dumb_animals';
+
+  return s;
+}
+
 const PHASE_RUNNERS = {
+  deployment:   (s,  a) => phaseDeployment(s, a),
   dumb_animals: (s, _a) => phaseDumbAnimals(s),
   come_by:      (s,  a) => phaseComeBy(s, a),
   loose_animal: (s, _a) => phaseLooseAnimal(s),
@@ -519,14 +554,14 @@ function processTurn(state, action, targetPhase) {
 
 const WALK_UP = {
   boardSize: 24,
-  dog:  { id: 'dog',  type: 'dog',  x: 1,  y: 22, radius: TOKEN_RADIUS },
+  dog:  { id: 'dog',  type: 'dog',  x: 1,  y: 12, radius: TOKEN_RADIUS },  // Default position (will be overridden by deployment)
   herd: { id: 'herd', type: 'herd', x: 6,  y: 10, radius: HERD_RADIUS  },
   pen:  { id: 'pen',  type: 'pen',  x: 18, y: 10, w: 8, h: 6, openSide: 'left' },
   looseAnimals: [],
   escapedCount: 0,
   events: [],
   turn: 1,
-  phase: 'dumb_animals',
+  phase: 'deployment',
   rng: Math.random,
 };
 
@@ -753,6 +788,7 @@ function MoveLine({ from, to }) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 const PHASE_META = {
+  deployment:    { label: "Deployment",    color: "#a8b8c8", border: "#7898b8", text: "#1a2a3a" },
   dumb_animals:  { label: "Dumb Animals",  color: "#c8b888", border: "#a89868", text: "#3a2e1a" },
   come_by:       { label: "Come-by",       color: "#b8c8a0", border: "#8aaa70", text: "#2a3a1a" },
   loose_animal:  { label: "Loose Animal",  color: "#c8b888", border: "#a89868", text: "#3a2e1a" },
@@ -904,7 +940,15 @@ export default function App() {
     anim.phase = 'idle';
 
     const initial = { ...sc.state, rng: Math.random };
-    const ready   = processTurn(initial, null, 'come_by');
+
+    // If starting with deployment, don't process any turns yet
+    let ready;
+    if (initial.phase === 'deployment') {
+      ready = initial;
+    } else {
+      ready = processTurn(initial, null, 'come_by');
+    }
+
     setDisplayPos(snapshotPos(ready));
     setGameState(ready);
     setPreview(null);
@@ -1039,15 +1083,54 @@ export default function App() {
     if (!gameState) return;
     const prev = gameState;
 
+    const anim = animRef.current;
+    // Cancel any in-flight animation
+    if (anim.raf) cancelAnimationFrame(anim.raf);
+
+    // ── Deployment phase: skip to dumb_animals animation only ────
+    if (prev.phase === 'deployment') {
+      // Deploy dog, then run dumb_animals
+      const afterDeployment = processTurn(prev, action, 'dumb_animals');
+      const final = processTurn(afterDeployment, null, 'come_by');
+
+      // Set up animation state (required for cleanup)
+      anim.fromDog  = { x: afterDeployment.dog.x,  y: afterDeployment.dog.y  };
+      anim.toDog    = { x: afterDeployment.dog.x,  y: afterDeployment.dog.y  };
+      anim.looseFrames = [];
+      anim.fromHerd = { x: afterDeployment.herd.x, y: afterDeployment.herd.y };
+      anim.toHerd   = { x: afterDeployment.herd.x, y: afterDeployment.herd.y };
+      anim.looseFrames2 = [];
+
+      // ── Animate dumb_animals wandering directly ────
+      anim.fromHerd2 = { x: afterDeployment.herd.x, y: afterDeployment.herd.y };
+      anim.toHerd2   = { x: final.herd.x, y: final.herd.y };
+
+      anim.midState   = afterDeployment;
+      anim.finalState = final;
+
+      // Skip directly to dumb_herd phase (no 500ms delay for dog/loose/herd)
+      const herdMoved = anim.fromHerd2.x !== anim.toHerd2.x || anim.fromHerd2.y !== anim.toHerd2.y;
+      if (herdMoved) {
+        anim.phase      = 'dumb_herd';
+        anim.startMs    = performance.now();
+        setDisplayPos(snapshotPos(afterDeployment));
+        anim.raf = requestAnimationFrame(runAnim);
+      } else {
+        // Herd didn't move, finish immediately
+        anim.phase = 'idle';
+        setDisplayPos(snapshotPos(final));
+        setGameState(final);
+      }
+      return;
+    }
+
+    // ── Normal turn: process through move_herd, then dumb_animals ────
+
     // Process through move_herd, stop before dumb_animals
     const afterMoveHerd = processTurn(prev, action, 'dumb_animals');
 
     // Process dumb_animals, stop before come_by
     const final = processTurn(afterMoveHerd, null, 'come_by');
-
-    const anim = animRef.current;
-    // Cancel any in-flight animation
-    if (anim.raf) cancelAnimationFrame(anim.raf);
 
     // ── First animation: move_herd phase (dog + loose + herd movements) ────
 
@@ -1106,26 +1189,52 @@ export default function App() {
 
   // ── Handle tap on board ───────────────────────────────────────────────────
   const handleBoardTap = useCallback((e) => {
-    if (!gameState || gameState.phase !== 'come_by') return;
+    if (!gameState) return;
     if (animRef.current.phase !== 'idle') return; // ignore taps during animation
     e.preventDefault();
+
     const clientX = e.touches ? e.touches[0].clientX : e.clientX;
     const clientY = e.touches ? e.touches[0].clientY : e.clientY;
     const tap = svgToGame(clientX, clientY);
     if (!tap) return;
-    if (dist(gameState.dog, tap) > DOG_MOVE_MAX) {
-      setInvalid(true);
-      setTimeout(() => setInvalid(false), 600);
+
+    // Deployment phase - place dog within 2" of left edge
+    if (gameState.phase === 'deployment') {
+      const deploymentZone = 2 + gameState.dog.radius;
+      if (tap.x > deploymentZone) {
+        setInvalid(true);
+        setTimeout(() => setInvalid(false), 600);
+        return;
+      }
+      setPreview(tap);
       return;
     }
-    setPreview(tap);
+
+    // Come-by phase - move dog within 12"
+    if (gameState.phase === 'come_by') {
+      const distance = dist(gameState.dog, tap);
+      if (distance > DOG_MOVE_MAX) {
+        setInvalid(true);
+        setTimeout(() => setInvalid(false), 600);
+        return;
+      }
+      // Always update preview on valid click, even if preview already exists
+      setPreview(tap);
+      return;
+    }
   }, [gameState, svgToGame]);
 
-  // ── Confirm move ──────────────────────────────────────────────────────────
+  // ── Confirm move/deployment ───────────────────────────────────────────────
   const handleConfirm = useCallback(() => {
     if (!preview || !gameState) return;
     setPreview(null);
-    commitMove({ type: 'move_dog', x: preview.x, y: preview.y });
+
+    if (gameState.phase === 'deployment') {
+      // Deploy dog - triggers animation through commitMove
+      commitMove({ type: 'deploy_dog', x: preview.x, y: preview.y });
+    } else {
+      commitMove({ type: 'move_dog', x: preview.x, y: preview.y });
+    }
   }, [preview, gameState, commitMove]);
 
   // ── Cancel preview ────────────────────────────────────────────────────────
@@ -1170,6 +1279,7 @@ export default function App() {
   const looseAnimals = displayPos.looseAnimals ?? gameState.looseAnimals;
 
   const phaseMeta   = PHASE_META[phase] || PHASE_META.dumb_animals;
+  const isDeployment  = phase === 'deployment' && !isAnimating;
   const isInteractive = phase === 'come_by' && !isAnimating && phase !== 'finished';
   const isFinished    = phase === 'finished';
   const recentEvents  = [...events].reverse().slice(0, 12);
@@ -1224,8 +1334,8 @@ export default function App() {
           ref={svgRef}
           viewBox={`0 0 ${BOARD_PX} ${BOARD_PX}`}
           style={{display:'block', width:'100%', aspectRatio:'1/1', background:'#e8dfc8', touchAction:'none'}}
-          onMouseDown={isInteractive ? handleBoardTap : undefined}
-          onTouchStart={isInteractive ? handleBoardTap : undefined}
+          onMouseDown={(isInteractive || isDeployment) ? handleBoardTap : undefined}
+          onTouchStart={(isInteractive || isDeployment) ? handleBoardTap : undefined}
         >
           <defs>
             <pattern id="g1" width="20" height="20" patternUnits="userSpaceOnUse">
@@ -1245,6 +1355,13 @@ export default function App() {
           <RulerLayer/>
           <PenEntity pen={pen}/>
           <SpookRing dog={dog}/>
+
+          {/* Deployment zone indicator */}
+          {isDeployment && (
+            <rect x={0} y={0} width={toPx(2)} height={BOARD_PX}
+              fill="rgba(58,88,120,0.12)" stroke="#3a5878"
+              strokeWidth={2} strokeDasharray="8,4" opacity={0.7}/>
+          )}
 
           {isInteractive && <DogRangeRing dog={dog} preview={!!preview}/>}
 
@@ -1346,6 +1463,20 @@ export default function App() {
              animRef.current.phase === 'dumb_loose' ? 'Loose animals wandering…' :
                                                       'Herd wandering…'}
           </div>
+        ) : isDeployment ? (
+          preview ? (
+            <>
+              <div style={{fontSize:11,color:'#4a3c22',flex:1}}>
+                Deploy dog at ({preview.x.toFixed(1)}", {preview.y.toFixed(1)}")?
+              </div>
+              <button onClick={handleCancel} style={btnStyle('ghost')}>Cancel</button>
+              <button onClick={handleConfirm} style={btnStyle('primary')}>Deploy</button>
+            </>
+          ) : (
+            <div style={{fontSize:11,color:'#4a3c22',flex:1,lineHeight:1.4}}>
+              Tap within the blue zone (2" from left edge) to place your dog.
+            </div>
+          )
         ) : preview ? (
           <>
             <div style={{fontSize:11,color:'#4a3c22',flex:1}}>

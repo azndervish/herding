@@ -772,7 +772,7 @@ describe('WALK_UP scenario', () => {
 
   it('has the correct starting positions', () => {
     assert.equal(WALK_UP.dog.x,  1);
-    assert.equal(WALK_UP.dog.y,  22);
+    assert.equal(WALK_UP.dog.y,  12);  // Dog starts at default position before deployment
     assert.equal(WALK_UP.herd.x, 6);
     assert.equal(WALK_UP.herd.y, 10);
     assert.equal(WALK_UP.pen.x,  18);
@@ -789,55 +789,55 @@ describe('WALK_UP scenario', () => {
     assert.equal(WALK_UP.looseAnimals.length, 0);
   });
 
-  it('starts at turn 1, dumb_animals phase', () => {
+  it('starts at turn 1, deployment phase', () => {
     assert.equal(WALK_UP.turn, 1);
-    assert.equal(WALK_UP.phase, 'dumb_animals');
+    assert.equal(WALK_UP.phase, 'deployment');
   });
 
-  it('dog starts > 12" from herd (entire board width to cross)', () => {
-    const d = dist(WALK_UP.dog, WALK_UP.herd);
-    assert.ok(d > 12, `Expected > 12", got ${d.toFixed(2)}"`);
+  it('dog default position is within deployment zone', () => {
+    assert.ok(WALK_UP.dog.x <= 2 + TOKEN_RADIUS, 'Dog x should be within 2" of left edge');
+    assert.ok(WALK_UP.dog.x >= TOKEN_RADIUS, 'Dog x should be within board bounds');
+    assert.ok(WALK_UP.dog.y >= TOKEN_RADIUS && WALK_UP.dog.y <= 24 - TOKEN_RADIUS, 'Dog y should be within board bounds');
   });
 
-  // ── App bootstrap sequence: processTurn(initial, null, 'come_by') ─────────
+  // ── App bootstrap sequence: deploy dog, then processTurn to come_by ───────
+
+  function deployedWalkUp(rng) {
+    const initial = { ...WALK_UP, rng };
+    const deployed = processTurn(initial, { type: 'deploy_dog', x: 1, y: 22 }, 'dumb_animals');
+    return processTurn(deployed, null, 'come_by');
+  }
 
   it('bootstrap: processTurn to come_by produces correct phase', () => {
-    const initial = { ...WALK_UP, rng: fixedRng(0.5) };
-    const s = processTurn(initial, null, 'come_by');
+    const s = deployedWalkUp(fixedRng(0.5));
     assert.equal(s.phase, 'come_by');
     assert.equal(s.turn, 1);
   });
 
   it('bootstrap: herd has moved after dumb_animals', () => {
-    const initial = { ...WALK_UP, rng: fixedRng(0.9) }; // guaranteed movement
-    const s = processTurn(initial, null, 'come_by');
+    const s = deployedWalkUp(fixedRng(0.9));
     const moved = s.herd.x !== WALK_UP.herd.x || s.herd.y !== WALK_UP.herd.y;
     assert.ok(moved);
   });
 
-  it('bootstrap: dog has NOT moved (dumb_animals does not move dog)', () => {
-    const initial = { ...WALK_UP, rng: fixedRng(0.5) };
-    const s = processTurn(initial, null, 'come_by');
-    assert.equal(s.dog.x, WALK_UP.dog.x);
-    assert.equal(s.dog.y, WALK_UP.dog.y);
+  it('bootstrap: dog has moved to deployment position', () => {
+    const s = deployedWalkUp(fixedRng(0.5));
+    assert.equal(s.dog.x, 1);
+    assert.equal(s.dog.y, 22);
   });
 
   it('bootstrap: events contain a Dumb Animals entry', () => {
-    const initial = { ...WALK_UP, rng: fixedRng(0.5) };
-    const s = processTurn(initial, null, 'come_by');
+    const s = deployedWalkUp(fixedRng(0.5));
     assert.ok(s.events.some(e => e.includes('Dumb Animals')));
   });
 
   it('bootstrap: escapedCount is 0 when herd does not reach an edge', () => {
-    // fixedRng(0.1): roll=1", angle=36° → herd moves from (6,10) to ~(6.8,10.6) — safely inside
-    const initial = { ...WALK_UP, rng: fixedRng(0.1) };
-    const s = processTurn(initial, null, 'come_by');
+    const s = deployedWalkUp(fixedRng(0.1));
     assert.equal(s.escapedCount, 0);
   });
 
   it('player can move dog and complete a full come_by cycle', () => {
-    const initial = { ...WALK_UP, rng: fixedRng(0.5) };
-    const atComeBy = processTurn(initial, null, 'come_by');
+    const atComeBy = deployedWalkUp(fixedRng(0.5));
 
     // Move dog 5" north (toward herd) — within 12" max
     const action = { type: 'move_dog', x: atComeBy.dog.x, y: atComeBy.dog.y - 5 };
@@ -854,7 +854,7 @@ describe('WALK_UP scenario', () => {
   });
 
   it('herd stays within board bounds after repeated turns', () => {
-    let s = { ...WALK_UP, rng: fixedRng(0.5) };
+    let s = deployedWalkUp(fixedRng(0.5));
     for (let i = 0; i < 10; i++) {
       if (s.phase === 'finished') break;
       s = processTurn(s, null, 'come_by');
@@ -868,7 +868,7 @@ describe('WALK_UP scenario', () => {
     // This is a probabilistic test — with a fixed RNG the herd drifts,
     // and eventually the dog can be walked to push it toward the pen.
     // We verify the game state machine can reach 'finished' without errors.
-    let s = { ...WALK_UP, rng: fixedRng(0.3) };
+    let s = deployedWalkUp(fixedRng(0.3));
     let turns = 0;
     while (s.phase !== 'finished' && turns < 50) {
       s = processTurn(s, null, 'come_by');

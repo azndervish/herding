@@ -475,7 +475,42 @@ function phaseMoveHerd(state) {
   return s;
 }
 
+function phaseDeployment(state, action) {
+  const s = cloneState(state);
+  const events = [];
+
+  console.log(`[deployment T${s.turn}] entry — action=${JSON.stringify(action)}`);
+
+  if (!action || action.type !== 'deploy_dog') {
+    throw new Error('deployment phase requires deploy_dog action');
+  }
+
+  const target = { x: action.x, y: action.y };
+
+  // Validate deployment zone: within 2" of left edge
+  if (target.x > 2 + s.dog.radius) {
+    throw new Error(`Dog must be deployed within 2" of left edge. Target x=${target.x.toFixed(2)}" exceeds ${(2 + s.dog.radius).toFixed(2)}"`);
+  }
+
+  // Validate within board bounds
+  if (target.x < s.dog.radius || target.y < s.dog.radius ||
+      target.x > s.boardSize - s.dog.radius || target.y > s.boardSize - s.dog.radius) {
+    throw new Error('Dog deployment must be within board bounds');
+  }
+
+  s.dog.x = target.x;
+  s.dog.y = target.y;
+  console.log(`[deployment T${s.turn}] dog deployed at ${_pos(s.dog)}`);
+  events.push(`Deployment: Dog placed at (${s.dog.x.toFixed(1)}, ${s.dog.y.toFixed(1)}).`);
+
+  s.events = [...s.events, ...events];
+  s.phase = 'dumb_animals';
+
+  return s;
+}
+
 const PHASE_RUNNERS = {
+  deployment:   (s,  a) => phaseDeployment(s, a),
   dumb_animals: (s, _a) => phaseDumbAnimals(s),
   come_by:      (s,  a) => phaseComeBy(s, a),
   loose_animal: (s, _a) => phaseLooseAnimal(s),
@@ -512,14 +547,14 @@ function processTurn(state, action, targetPhase) {
 
 const WALK_UP = {
   boardSize: 24,
-  dog:  { id: 'dog',  type: 'dog',  x: 1,  y: 22, radius: TOKEN_RADIUS },
+  dog:  { id: 'dog',  type: 'dog',  x: 1,  y: 12, radius: TOKEN_RADIUS },  // Default position (will be overridden by deployment)
   herd: { id: 'herd', type: 'herd', x: 6,  y: 10, radius: HERD_RADIUS  },
   pen:  { id: 'pen',  type: 'pen',  x: 18, y: 10, w: 8, h: 6, openSide: 'left' },
   looseAnimals: [],
   escapedCount: 0,
   events: [],
   turn: 1,
-  phase: 'dumb_animals',
+  phase: 'deployment',
   rng: Math.random,
 };
 
@@ -531,8 +566,7 @@ const SCENARIOS = [
 
 export {
   HERD_RADIUS, TOKEN_RADIUS, DOG_MOVE_MAX, DOG_SPOOK_RANGE, HERD_CLEARANCE,
-  dist, unitVector, touchesEdge, entitiesContact, circleRectContact, rollDie, angleToOffset, cloneState,
-  getPenWalls, distToSegment, circleSegmentCollision, raySegmentIntersect,
-  phaseDumbAnimals, phaseComeBy, phaseLooseAnimal, phaseMoveHerd,
-  processTurn, WALK_UP, SCENARIOS,
+  dist, unitVector, touchesEdge, entitiesContact, rollDie, angleToOffset, cloneState,
+  phaseDumbAnimals, phaseComeBy, phaseLooseAnimal, phaseMoveHerd, phaseDeployment,
+  processTurn, WALK_UP,
 };
