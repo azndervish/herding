@@ -38,6 +38,35 @@ function circleRectContact(circle, rect) {
   return distSquared <= (circle.radius * circle.radius);
 }
 
+function pointInRect(x, y, rect) {
+  // Check if point (x, y) is inside rectangle
+  const left = rect.x - rect.w/2;
+  const right = rect.x + rect.w/2;
+  const top = rect.y - rect.h/2;
+  const bottom = rect.y + rect.h/2;
+  return x >= left && x <= right && y >= top && y <= bottom;
+}
+
+function isInLabouringTerrain(x, y, terrain = []) {
+  // Check if point (x, y) is inside any labouring terrain
+  for (const t of terrain) {
+    if (t.type === 'labouring' && pointInRect(x, y, t)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function isInAntitheticalTerrain(x, y, terrain = []) {
+  // Check if point (x, y) is inside any antithetical terrain
+  for (const t of terrain) {
+    if (t.type === 'antithetical' && pointInRect(x, y, t)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function getPenWalls(pen) {
   // Returns array of line segments [x1, y1, x2, y2] for closed sides only
   // Open side has no walls - animals can enter/exit freely
@@ -151,6 +180,78 @@ function _checkStateOob(tag, s) {
 
 // ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * Resolves movement from current position to target, handling all collision types.
+ * Returns { x, y, blocked, obstacle } where:
+ * - x, y: final position after collision resolution
+ * - blocked: true if movement was blocked by another entity
+ * - obstacle: description of what blocked movement (if any)
+ * @param {boolean} checkEntityCollisions - if false, only check walls/terrain (for dumb_animals phase)
+ */
+function resolveMovement(animal, targetX, targetY, state, escapedIds = new Set(), checkEntityCollisions = true) {
+  const { boardSize, pen, terrain = [], dog, herd, looseAnimals } = state;
+  let newX = targetX;
+  let newY = targetY;
+  let blocked = false;
+  let obstacle = null;
+
+  // Check pen wall collisions along the movement path
+  const walls = getPenWalls(pen);
+  let wallBlockDist = Infinity;
+  for (const wall of walls) {
+    const t = raySegmentIntersect(animal, { x: newX, y: newY }, wall[0], wall[1], wall[2], wall[3], animal.radius);
+    if (t !== null && t < wallBlockDist) {
+      wallBlockDist = t;
+    }
+  }
+
+  // Check terrain collision along the path
+  const terrainEdges = getTerrainEdges(terrain);
+  let terrainBlockDist = Infinity;
+  for (const edge of terrainEdges) {
+    const t = raySegmentIntersect(animal, { x: newX, y: newY }, edge[0], edge[1], edge[2], edge[3], animal.radius);
+    if (t !== null && t < terrainBlockDist) {
+      terrainBlockDist = t;
+    }
+  }
+
+  const blockDist = Math.min(wallBlockDist, terrainBlockDist);
+
+  if (blockDist < Infinity) {
+    // Stop just before hitting the obstacle
+    const dir = unitVector(animal, { x: newX, y: newY });
+    const stopDist = Math.max(0, blockDist - 0.01);
+    newX = animal.x + dir.x * stopDist;
+    newY = animal.y + dir.y * stopDist;
+    obstacle = terrainBlockDist < wallBlockDist ? 'impassable terrain' : 'pen wall';
+  }
+
+  // Check entity collisions (dog, herd, other loose animals)
+  if (checkEntityCollisions) {
+    // Loose animals can move into contact with herd (for rejoining), but not other entities
+    const others = animal.type === 'loose'
+      ? [dog, ...looseAnimals].filter(e => e.id !== animal.id && !escapedIds.has(e.id))
+      : [dog, herd, ...looseAnimals].filter(e => e.id !== animal.id && !escapedIds.has(e.id));
+
+    for (const other of others) {
+      const testPos = { x: newX, y: newY, radius: animal.radius };
+      if (entitiesContact(testPos, other)) {
+        const dir = unitVector(animal, { x: newX, y: newY });
+        const stopDist = Math.max(0, dist(animal, other) - animal.radius - other.radius - 0.01);
+        newX = animal.x + dir.x * stopDist;
+        newY = animal.y + dir.y * stopDist;
+        obstacle = other.id;
+        blocked = true;
+        break;
+      }
+    }
+  }
+
+  return { x: newX, y: newY, blocked, obstacle };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 function phaseDumbAnimals(state) {
   const s = cloneState(state);
   const { rng, boardSize } = s;
@@ -163,52 +264,35 @@ function phaseDumbAnimals(state) {
     (a, b) => dist(b, s.dog) - dist(a, s.dog)
   );
   for (const animal of animals) {
-    const roll = rollDie(6, rng);
+    let roll = rollDie(6, rng);
     const angle = rng() * 360;
+
+    // Check if animal center is in labouring terrain - halve movement (round up)
+    const inLabouring = isInLabouringTerrain(animal.x, animal.y, s.terrain);
+    if (inLabouring) {
+      roll = Math.ceil(roll / 2);
+    }
+
     const { dx, dy } = angleToOffset(angle, roll);
     if (animal.type === 'herd') {
       const _hBefore = { x: s.herd.x, y: s.herd.y };
       const targetX = s.herd.x + dx;
       const targetY = s.herd.y + dy;
 
-      // Check pen wall collision along the path
-      const walls = getPenWalls(s.pen);
-      let wallBlockDist = Infinity;
-      for (const wall of walls) {
-        const t = raySegmentIntersect(s.herd, { x: targetX, y: targetY }, wall[0], wall[1], wall[2], wall[3], s.herd.radius);
-        if (t !== null && t < wallBlockDist) {
-          wallBlockDist = t;
-        }
-      }
+      const result = resolveMovement(s.herd, targetX, targetY, s, new Set(), true);
+      s.herd.x = result.x;
+      s.herd.y = result.y;
 
-      // Check terrain collision along the path
-      const terrainEdges = getTerrainEdges(s.terrain || []);
-      let terrainBlockDist = Infinity;
-      for (const edge of terrainEdges) {
-        const t = raySegmentIntersect(s.herd, { x: targetX, y: targetY }, edge[0], edge[1], edge[2], edge[3], s.herd.radius);
-        if (t !== null && t < terrainBlockDist) {
-          terrainBlockDist = t;
-        }
-      }
+      console.log(`[dumbAnimals T${s.turn}] herd: roll=${roll} angle=${angle.toFixed(0)}°${inLabouring ? ' (labouring)' : ''} | (${_hBefore.x.toFixed(2)},${_hBefore.y.toFixed(2)}) → ${_pos(s.herd)}`);
 
-      const blockDist = Math.min(wallBlockDist, terrainBlockDist);
-
-      if (blockDist < Infinity) {
-        // Stop just before hitting the obstacle
-        const dir = unitVector(s.herd, { x: targetX, y: targetY });
-        const stopDist = Math.max(0, blockDist - 0.01);
-        s.herd.x += dir.x * stopDist;
-        s.herd.y += dir.y * stopDist;
-        const obstacle = terrainBlockDist < wallBlockDist ? 'impassable terrain' : 'pen wall';
-        console.log(`[dumbAnimals T${s.turn}] herd blocked by ${obstacle} at dist=${blockDist.toFixed(2)}", stopped at ${_pos(s.herd)}`);
-        events.push(`Dumb Animals: Herd bumped into ${obstacle}.`);
+      if (result.obstacle) {
+        console.log(`[dumbAnimals T${s.turn}] herd blocked by ${result.obstacle}, stopped at ${_pos(s.herd)}`);
+        events.push(`Dumb Animals: Herd bumped into ${result.obstacle}.`);
       } else {
-        s.herd.x = targetX;
-        s.herd.y = targetY;
-        events.push(`Dumb Animals: Herd wanders ${roll}" (${angle.toFixed(0)}°).`);
+        const labourMsg = inLabouring ? ' (labouring terrain)' : '';
+        events.push(`Dumb Animals: Herd wanders ${roll}" (${angle.toFixed(0)}°)${labourMsg}.`);
       }
 
-      console.log(`[dumbAnimals T${s.turn}] herd: roll=${roll} angle=${angle.toFixed(0)}° | (${_hBefore.x.toFixed(2)},${_hBefore.y.toFixed(2)}) → ${_pos(s.herd)}`);
       if (touchesEdge(s.herd, boardSize)) {
         console.warn(`[dumbAnimals T${s.turn}] herd OOB at ${_pos(s.herd)} — clamping to board`);
         s.herd.x = Math.max(s.herd.radius, Math.min(boardSize - s.herd.radius, s.herd.x));
@@ -223,44 +307,20 @@ function phaseDumbAnimals(state) {
         const targetX = la.x + dx;
         const targetY = la.y + dy;
 
-        // Check pen wall collision along the path
-        const walls = getPenWalls(s.pen);
-        let wallBlockDist = Infinity;
-        for (const wall of walls) {
-          const t = raySegmentIntersect(la, { x: targetX, y: targetY }, wall[0], wall[1], wall[2], wall[3], la.radius);
-          if (t !== null && t < wallBlockDist) {
-            wallBlockDist = t;
-          }
-        }
+        const result = resolveMovement(la, targetX, targetY, s, new Set(), true);
+        la.x = result.x;
+        la.y = result.y;
 
-        // Check terrain collision along the path
-        const terrainEdges = getTerrainEdges(s.terrain || []);
-        let terrainBlockDist = Infinity;
-        for (const edge of terrainEdges) {
-          const t = raySegmentIntersect(la, { x: targetX, y: targetY }, edge[0], edge[1], edge[2], edge[3], la.radius);
-          if (t !== null && t < terrainBlockDist) {
-            terrainBlockDist = t;
-          }
-        }
+        console.log(`[dumbAnimals T${s.turn}] ${la.id}: roll=${roll} angle=${angle.toFixed(0)}°${inLabouring ? ' (labouring)' : ''} | (${_laBefore.x.toFixed(2)},${_laBefore.y.toFixed(2)}) → ${_pos(la)}`);
 
-        const blockDist = Math.min(wallBlockDist, terrainBlockDist);
-
-        if (blockDist < Infinity) {
-          // Stop just before hitting the obstacle
-          const dir = unitVector(la, { x: targetX, y: targetY });
-          const stopDist = Math.max(0, blockDist - 0.01);
-          la.x += dir.x * stopDist;
-          la.y += dir.y * stopDist;
-          const obstacle = terrainBlockDist < wallBlockDist ? 'impassable terrain' : 'pen wall';
-          console.log(`[dumbAnimals T${s.turn}] ${la.id} blocked by ${obstacle} at dist=${blockDist.toFixed(2)}", stopped at ${_pos(la)}`);
-          events.push(`Dumb Animals: ${la.id} bumped into ${obstacle}.`);
+        if (result.obstacle) {
+          console.log(`[dumbAnimals T${s.turn}] ${la.id} blocked by ${result.obstacle}, stopped at ${_pos(la)}`);
+          events.push(`Dumb Animals: ${la.id} bumped into ${result.obstacle}.`);
         } else {
-          la.x = targetX;
-          la.y = targetY;
-          events.push(`Dumb Animals: ${la.id} wanders ${roll}".`);
+          const labourMsg = inLabouring ? ' (labouring terrain)' : '';
+          events.push(`Dumb Animals: ${la.id} wanders ${roll}"${labourMsg}.`);
         }
 
-        console.log(`[dumbAnimals T${s.turn}] ${la.id}: roll=${roll} angle=${angle.toFixed(0)}° | (${_laBefore.x.toFixed(2)},${_laBefore.y.toFixed(2)}) → ${_pos(la)}`);
         if (touchesEdge(la, boardSize)) {
           console.warn(`[dumbAnimals T${s.turn}] ${la.id} OOB at ${_pos(la)} — marking escaped`);
           la._escaped = true; events.push(`${la.id} reached the edge and escaped!`);
@@ -456,16 +516,25 @@ function phaseMoveHerd(state) {
       console.log(`[moveHerd T${s.turn}] ${animal.id} already ${d.toFixed(2)}" from dog — no push needed`);
       continue;
     }
-    const needed = HERD_CLEARANCE - d;
+    let needed = HERD_CLEARANCE - d;
+
+    // Check if animal center is in labouring terrain - halve movement (round up)
+    const inLabouring = isInLabouringTerrain(animal.x, animal.y, s.terrain);
+    if (inLabouring) {
+      needed = Math.ceil(needed / 2);
+    }
+
     const dir = unitVector(s.dog, animal);
-    let newX = animal.x + dir.x * needed, newY = animal.y + dir.y * needed;
-    console.log(`[moveHerd T${s.turn}] ${animal.id}: dist=${d.toFixed(2)}", pushing ${needed.toFixed(2)}" → (${newX.toFixed(2)},${newY.toFixed(2)})`);
-    const wouldEscape = newX < animal.radius || newY < animal.radius ||
-                        newX > boardSize - animal.radius || newY > boardSize - animal.radius;
+    const targetX = animal.x + dir.x * needed;
+    const targetY = animal.y + dir.y * needed;
+    console.log(`[moveHerd T${s.turn}] ${animal.id}: dist=${d.toFixed(2)}", pushing ${needed.toFixed(2)}"${inLabouring ? ' (labouring)' : ''} → (${targetX.toFixed(2)},${targetY.toFixed(2)})`);
+
+    const wouldEscape = targetX < animal.radius || targetY < animal.radius ||
+                        targetX > boardSize - animal.radius || targetY > boardSize - animal.radius;
     if (wouldEscape) {
-      console.warn(`[moveHerd T${s.turn}] ${animal.id} would escape at (${newX.toFixed(2)},${newY.toFixed(2)}) — clamping`);
-      newX = Math.max(animal.radius, Math.min(boardSize - animal.radius, newX));
-      newY = Math.max(animal.radius, Math.min(boardSize - animal.radius, newY));
+      const newX = Math.max(animal.radius, Math.min(boardSize - animal.radius, targetX));
+      const newY = Math.max(animal.radius, Math.min(boardSize - animal.radius, targetY));
+      console.warn(`[moveHerd T${s.turn}] ${animal.id} would escape at (${targetX.toFixed(2)},${targetY.toFixed(2)}) — clamping`);
       if (animal.type === 'herd') {
         s.herd.x = newX; s.herd.y = newY;
         s.escapedCount = (s.escapedCount || 0) + 1;
@@ -477,72 +546,71 @@ function phaseMoveHerd(state) {
       }
       continue;
     }
-    // Check for pen wall collisions along the movement path
-    const walls = getPenWalls(s.pen);
-    let wallBlockDist = Infinity;
-    for (const wall of walls) {
-      const t = raySegmentIntersect(animal, { x: newX, y: newY }, wall[0], wall[1], wall[2], wall[3], animal.radius);
-      if (t !== null && t < wallBlockDist) {
-        wallBlockDist = t;
-      }
+
+    const result = resolveMovement(animal, targetX, targetY, s, escapedIds);
+    let newX = result.x;
+    let newY = result.y;
+    let blocked = result.blocked;
+
+    if (result.obstacle) {
+      console.log(`[moveHerd T${s.turn}] ${animal.id} blocked by ${result.obstacle}, stopped at (${newX.toFixed(2)},${newY.toFixed(2)})`);
+      events.push(`Move Herd: ${animal.id} ${blocked ? 'stopped — contact with' : 'blocked by'} ${result.obstacle}.`);
     }
 
-    // Check terrain collision along the path
-    const terrainEdges = getTerrainEdges(s.terrain || []);
-    let terrainBlockDist = Infinity;
-    for (const edge of terrainEdges) {
-      const t = raySegmentIntersect(animal, { x: newX, y: newY }, edge[0], edge[1], edge[2], edge[3], animal.radius);
-      if (t !== null && t < terrainBlockDist) {
-        terrainBlockDist = t;
-      }
-    }
+    // Check if animal center is in antithetical terrain - move TOWARDS dog instead
+    const inAntithetical = isInAntitheticalTerrain(animal.x, animal.y, s.terrain);
+    if (inAntithetical && d <= HERD_CLEARANCE) {
+      const pullDistance = HERD_CLEARANCE - d;
+      const dirToDog = unitVector(animal, s.dog); // Direction TOWARD dog (reversed)
+      const pullX = animal.x + dirToDog.x * pullDistance;
+      const pullY = animal.y + dirToDog.y * pullDistance;
 
-    const blockDist = Math.min(wallBlockDist, terrainBlockDist);
+      console.log(`[moveHerd T${s.turn}] ${animal.id} in antithetical terrain — pulling ${pullDistance.toFixed(2)}" toward dog`);
 
-    if (blockDist < Infinity) {
-      // Stop just before hitting the obstacle
-      const dir = unitVector(animal, { x: newX, y: newY });
-      const stopDist = Math.max(0, blockDist - 0.01);
-      newX = animal.x + dir.x * stopDist;
-      newY = animal.y + dir.y * stopDist;
-      const obstacle = terrainBlockDist < wallBlockDist ? 'impassable terrain' : 'pen wall';
-      console.log(`[moveHerd T${s.turn}] ${animal.id} blocked by ${obstacle} at dist=${blockDist.toFixed(2)}", stopped at (${newX.toFixed(2)},${newY.toFixed(2)})`);
-      events.push(`Move Herd: ${animal.id} blocked by ${obstacle}.`);
-    }
+      // Check if pulling would cause contact with dog
+      const pullResult = resolveMovement(animal, pullX, pullY, s, escapedIds);
+      newX = pullResult.x;
+      newY = pullResult.y;
+      blocked = pullResult.blocked;
 
-    const others = [s.dog, s.herd, ...s.looseAnimals].filter(e => e.id !== animal.id && !escapedIds.has(e.id));
-    let blocked = false;
-    for (const other of others) {
-      const testPos2 = { x: newX, y: newY, radius: animal.radius };
-      if (entitiesContact(testPos2, other)) {
-        const stopDist = Math.max(0, dist(animal, other) - animal.radius - other.radius - 0.01);
-        newX = animal.x + dir.x * stopDist; newY = animal.y + dir.y * stopDist;
-        console.log(`[moveHerd T${s.turn}] ${animal.id} blocked by ${other.id}, stopping at (${newX.toFixed(2)},${newY.toFixed(2)})`);
-        events.push(`Move Herd: ${animal.id} stopped — contact with ${other.id}.`);
-        blocked = true; break;
-      }
+      events.push(`Move Herd: ${animal.id} drawn ${pullDistance.toFixed(1)}" toward dog (antithetical terrain).`);
     }
-    if (animal.type === 'herd') { s.herd.x = newX; s.herd.y = newY; }
-    else {
+    // Update entity position
+    if (animal.type === 'herd') {
+      s.herd.x = newX;
+      s.herd.y = newY;
+    } else {
       const la = s.looseAnimals.find(a => a.id === animal.id);
-      if (la) { la.x = newX; la.y = newY; }
+      if (la) {
+        la.x = newX;
+        la.y = newY;
+      }
     }
+
+    // Check if loose animal rejoined herd
     if (animal.type === 'loose') {
       const la = s.looseAnimals.find(a => a.id === animal.id);
       const contactsHerd = la && (entitiesContact(la, s.herd) ||
         (blocked && dist({ x: newX, y: newY }, s.herd) <= la.radius + s.herd.radius + 0.05));
       if (contactsHerd) {
         console.log(`[moveHerd T${s.turn}] ${la.id} rejoined herd at (${newX.toFixed(2)},${newY.toFixed(2)})`);
-        escapedIds.add(la.id); events.push(`Move Herd: ${la.id} rejoined the herd!`); continue;
+        escapedIds.add(la.id);
+        events.push(`Move Herd: ${la.id} rejoined the herd!`);
+        continue;
       }
     }
-    if (!blocked) events.push(`Move Herd: ${animal.id} moved ${needed.toFixed(1)}" away from dog.`);
+
+    if (!result.obstacle && !inAntithetical) {
+      const labourMsg = inLabouring ? ' (labouring terrain)' : '';
+      events.push(`Move Herd: ${animal.id} moved ${needed.toFixed(1)}" away from dog${labourMsg}.`);
+    }
   }
   s.looseAnimals = s.looseAnimals.filter(a => !escapedIds.has(a.id) && !a._escaped);
   s.events = [...s.events, ...events];
 
-  if (circleRectContact(s.herd, s.pen)) {
-    console.log(`[moveHerd T${s.turn}] herd reached pen — FINISHED`);
+  // Victory condition: herd center must be inside the pen
+  if (pointInRect(s.herd.x, s.herd.y, s.pen)) {
+    console.log(`[moveHerd T${s.turn}] herd center reached pen — FINISHED`);
     s.events.push("🐑 The herd is in the pen! That'll do!");
     s.phase = 'finished'; return s;
   }
@@ -570,9 +638,8 @@ function phaseDeployment(state, action) {
     throw new Error(`Dog must be deployed within 2" of left edge. Target x=${target.x.toFixed(2)}" exceeds ${(2 + s.dog.radius).toFixed(2)}"`);
   }
 
-  // Validate within board bounds
-  if (target.x < s.dog.radius || target.y < s.dog.radius ||
-      target.x > s.boardSize - s.dog.radius || target.y > s.boardSize - s.dog.radius) {
+  // Validate within board bounds (allow edges, just like normal gameplay)
+  if (target.x < 0 || target.y < 0 || target.x > s.boardSize || target.y > s.boardSize) {
     throw new Error('Dog deployment must be within board bounds');
   }
 
@@ -655,9 +722,43 @@ const ROTTEN_BRIDGE = {
   rng: Math.random,
 };
 
+const DEAD_MOUNT = {
+  boardSize: 24,
+  dog:  { id: 'dog',  type: 'dog',  x: 1,  y: 12, radius: TOKEN_RADIUS },
+  herd: { id: 'herd', type: 'herd', x: 10, y: 22, radius: HERD_RADIUS  }, // 10" from left (24-10=14" from right), 2" from bottom (24-2=22)
+  pen:  { id: 'pen',  type: 'pen',  x: 20, y: 4, w: 8, h: 8, openSide: 'bottom' }, // Top right corner: center at (20,4), opens bottom
+  looseAnimals: [],
+  escapedCount: 0,
+  events: [],
+  turn: 1,
+  phase: 'deployment',
+  terrain: [
+    { id: 'labouring_right', type: 'labouring', x: 18, y: 12, w: 12, h: 24 }, // Right half of board: center at x=18, covers x=12 to x=24
+  ],
+  rng: Math.random,
+};
+
+const BOGS_EDGE = {
+  boardSize: 24,
+  dog:  { id: 'dog',  type: 'dog',  x: 1,  y: 12, radius: TOKEN_RADIUS },
+  herd: { id: 'herd', type: 'herd', x: 10, y: 8,  radius: HERD_RADIUS  }, // 10" from left, 8" from top
+  pen:  { id: 'pen',  type: 'pen',  x: 12, y: 22, w: 8, h: 4, openSide: 'right' }, // 8" from right (24-8=16, center at 12), 2" from bottom (24-2=22, center at 22), 8"x4", opens right
+  looseAnimals: [],
+  escapedCount: 0,
+  events: [],
+  turn: 1,
+  phase: 'deployment',
+  terrain: [
+    { id: 'murky_water', type: 'antithetical', x: 20, y: 12, w: 8, h: 24 }, // 8" wide, runs full height, 6" from right edge means left edge at x=18 (24-6=18), center at x=20 (18+4)
+  ],
+  rng: Math.random,
+};
+
 const SCENARIOS = [
   { id: 'walk_up', name: 'Walk Up', state: WALK_UP },
   { id: 'rotten_bridge', name: 'Rotten Bridge', state: ROTTEN_BRIDGE },
+  { id: 'dead_mount', name: 'Dead Mount', state: DEAD_MOUNT },
+  { id: 'bogs_edge', name: "Bog's Edge", state: BOGS_EDGE },
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -671,6 +772,53 @@ function toPx(inches) { return (inches / 24) * BOARD_PX; }
 function TerrainLayer({ terrain = [] }) {
   return (
     <g>
+      {/* Antithetical terrain (murky water - pulls animals toward dog) */}
+      {terrain.filter(t => t.type === 'antithetical').map(t => {
+        const left = toPx(t.x - t.w/2);
+        const top = toPx(t.y - t.h/2);
+        const width = toPx(t.w);
+        const height = toPx(t.h);
+        return (
+          <g key={t.id}>
+            <rect x={left} y={top} width={width} height={height}
+              fill="#4a6a58" opacity={0.5} />
+            <rect x={left} y={top} width={width} height={height}
+              fill="none" stroke="#2a4a38" strokeWidth={2} strokeDasharray="6,4" opacity={0.7} />
+            {/* Swirling pattern */}
+            {[0.2, 0.4, 0.6, 0.8].map((rx, i) => (
+              <circle key={`c${i}`}
+                cx={left + width * rx} cy={top + height * 0.5}
+                r={8 + i * 2}
+                fill="none" stroke="#3a5a48" strokeWidth={1.5} opacity={0.3}
+                strokeDasharray="4,4" />
+            ))}
+          </g>
+        );
+      })}
+
+      {/* Labouring terrain (muddy/rough ground) */}
+      {terrain.filter(t => t.type === 'labouring').map(t => {
+        const left = toPx(t.x - t.w/2);
+        const top = toPx(t.y - t.h/2);
+        const width = toPx(t.w);
+        const height = toPx(t.h);
+        return (
+          <g key={t.id}>
+            <rect x={left} y={top} width={width} height={height}
+              fill="#8a7a5a" opacity={0.25} />
+            <rect x={left} y={top} width={width} height={height}
+              fill="none" stroke="#7a6a48" strokeWidth={1.5} strokeDasharray="4,3" opacity={0.6} />
+            {/* Mud texture - diagonal lines */}
+            {Array.from({length: Math.ceil(width / 15)}, (_, i) => (
+              <line key={`v${i}`}
+                x1={left + i * 15} y1={top}
+                x2={left + i * 15 + height * 0.3} y2={top + height}
+                stroke="#7a6a48" strokeWidth={1} opacity={0.2} />
+            ))}
+          </g>
+        );
+      })}
+
       {/* Impassable terrain (water) */}
       {terrain.filter(t => t.type === 'impassable').map(t => {
         const left = toPx(t.x - t.w/2);
@@ -848,14 +996,17 @@ function HerdEntity({ herd }) {
 
 function LooseAnimalEntity({ la }) {
   const cx=toPx(la.x), cy=toPx(la.y), r=toPx(la.radius);
+  const rejoining = la.rejoining;
   return (
-    <g>
+    <g opacity={rejoining ? 0.6 : 1}>
       <circle cx={cx+1} cy={cy+1} r={r} fill="#9a9070" opacity={0.22}/>
       <circle cx={cx} cy={cy} r={r} fill="#f4f0d8"
-        stroke="#b89828" strokeWidth={1.5} strokeDasharray="2,1.5"/>
-      <circle cx={cx} cy={cy} r={2.5} fill="#b89828"/>
+        stroke={rejoining ? "#5a8040" : "#b89828"}
+        strokeWidth={rejoining ? 2 : 1.5}
+        strokeDasharray="2,1.5"/>
+      <circle cx={cx} cy={cy} r={2.5} fill={rejoining ? "#5a8040" : "#b89828"}/>
       <text x={cx} y={cy+r+10} textAnchor="middle"
-        fontSize={8} fontFamily="monospace" fill="#9a8010">
+        fontSize={8} fontFamily="monospace" fill={rejoining ? "#3a5a20" : "#9a8010"}>
         {la.id.replace('loose_','L')}
       </text>
     </g>
@@ -1062,13 +1213,15 @@ export default function App() {
     let ready;
     if (initial.phase === 'deployment') {
       ready = initial;
+      // Initialize preview with dog's starting position so Deploy button shows immediately
+      setPreview({ x: ready.dog.x, y: ready.dog.y });
     } else {
       ready = processTurn(initial, null, 'come_by');
+      setPreview(null);
     }
 
     setDisplayPos(snapshotPos(ready));
     setGameState(ready);
-    setPreview(null);
     setScenario(sc);
     setScreen('game');
   }, []);
@@ -1121,10 +1274,17 @@ export default function App() {
         radius: f.radius,
         x: lerp(f.fromX, f.toX, ease),
         y: lerp(f.fromY, f.toY, ease),
+        rejoining: f.rejoining,
       }));
       setDisplayPos(prev => ({ ...prev, looseAnimals: frames }));
 
       if (t >= 1) {
+        // Filter out rejoined animals before advancing to herd stage
+        const stillPresent = anim.looseFrames
+          .filter(f => !f.rejoining)
+          .map(f => ({ id: f.id, radius: f.radius, x: f.toX, y: f.toY }));
+        setDisplayPos(prev => ({ ...prev, looseAnimals: stillPresent }));
+
         // Advance to herd stage
         anim.phase   = 'herd';
         anim.startMs = performance.now();
@@ -1169,10 +1329,17 @@ export default function App() {
         radius: f.radius,
         x: lerp(f.fromX, f.toX, ease),
         y: lerp(f.fromY, f.toY, ease),
+        rejoining: f.rejoining,
       }));
       setDisplayPos(prev => ({ ...prev, looseAnimals: frames }));
 
       if (t >= 1) {
+        // Filter out rejoined animals before advancing to dumb_herd stage
+        const stillPresent = anim.looseFrames2
+          .filter(f => !f.rejoining)
+          .map(f => ({ id: f.id, radius: f.radius, x: f.toX, y: f.toY }));
+        setDisplayPos(prev => ({ ...prev, looseAnimals: stillPresent }));
+
         // Advance to dumb_herd stage
         anim.phase   = 'dumb_herd';
         anim.startMs = performance.now();
@@ -1261,11 +1428,30 @@ export default function App() {
 
     // Record from→to for each loose animal during move_herd.
     // New animals (not in prev) start at prev herd position (spawn point).
+    // Animals that rejoined during move_herd animate to herd center before disappearing.
     const prevLaMap = Object.fromEntries(prev.looseAnimals.map(la => [la.id, la]));
-    anim.looseFrames = afterMoveHerd.looseAnimals.map(la => {
+    const midLaIds = new Set(afterMoveHerd.looseAnimals.map(la => la.id));
+
+    // Animals still present after move_herd
+    const presentFrames = afterMoveHerd.looseAnimals.map(la => {
       const from = prevLaMap[la.id] ?? { x: prev.herd.x, y: prev.herd.y };
       return { id: la.id, radius: la.radius, fromX: from.x, fromY: from.y, toX: la.x, toY: la.y };
     });
+
+    // Animals that rejoined during move_herd - animate to herd center
+    const rejoinedFrames = prev.looseAnimals
+      .filter(la => !midLaIds.has(la.id) && afterMoveHerd.events.some(e => e.includes(la.id) && e.includes('rejoined')))
+      .map(la => ({
+        id: la.id,
+        radius: la.radius,
+        fromX: la.x,
+        fromY: la.y,
+        toX: afterMoveHerd.herd.x,
+        toY: afterMoveHerd.herd.y,
+        rejoining: true,
+      }));
+
+    anim.looseFrames = [...presentFrames, ...rejoinedFrames];
 
     // ── Second animation: dumb_animals phase (wandering) ────
 
@@ -1275,11 +1461,29 @@ export default function App() {
 
     // Record from→to for loose animals during dumb_animals
     const midLaMap = Object.fromEntries(afterMoveHerd.looseAnimals.map(la => [la.id, la]));
-    anim.looseFrames2 = final.looseAnimals.map(la => {
+    const finalLaIds = new Set(final.looseAnimals.map(la => la.id));
+
+    // Animals still present after dumb_animals
+    const presentFrames2 = final.looseAnimals.map(la => {
       const from = midLaMap[la.id];
       if (!from) return null; // animal was removed (escaped/rejoined)
       return { id: la.id, radius: la.radius, fromX: from.x, fromY: from.y, toX: la.x, toY: la.y };
     }).filter(Boolean);
+
+    // Animals that rejoined during dumb_animals - animate to herd center
+    const rejoinedFrames2 = afterMoveHerd.looseAnimals
+      .filter(la => !finalLaIds.has(la.id) && final.events.some(e => e.includes(la.id) && e.includes('rejoined')))
+      .map(la => ({
+        id: la.id,
+        radius: la.radius,
+        fromX: la.x,
+        fromY: la.y,
+        toX: final.herd.x,
+        toY: final.herd.y,
+        rejoining: true,
+      }));
+
+    anim.looseFrames2 = [...presentFrames2, ...rejoinedFrames2];
 
     anim.midState   = afterMoveHerd;
     anim.finalState = final;
@@ -1581,19 +1785,13 @@ export default function App() {
                                                       'Herd wandering…'}
           </div>
         ) : isDeployment ? (
-          preview ? (
-            <>
-              <div style={{fontSize:11,color:'#4a3c22',flex:1}}>
-                Deploy dog at ({preview.x.toFixed(1)}", {preview.y.toFixed(1)}")?
-              </div>
-              <button onClick={handleCancel} style={btnStyle('ghost')}>Cancel</button>
-              <button onClick={handleConfirm} style={btnStyle('primary')}>Deploy</button>
-            </>
-          ) : (
-            <div style={{fontSize:11,color:'#4a3c22',flex:1,lineHeight:1.4}}>
-              Tap within the blue zone (2" from left edge) to place your dog.
+          <>
+            <div style={{fontSize:11,color:'#4a3c22',flex:1}}>
+              {preview ? `Deploy dog at (${preview.x.toFixed(1)}", ${preview.y.toFixed(1)}")?` : 'Tap within the blue zone to adjust position.'}
             </div>
-          )
+            {preview && <button onClick={handleCancel} style={btnStyle('ghost')}>Cancel</button>}
+            {preview && <button onClick={handleConfirm} style={btnStyle('primary')}>Deploy</button>}
+          </>
         ) : preview ? (
           <>
             <div style={{fontSize:11,color:'#4a3c22',flex:1}}>

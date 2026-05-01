@@ -44,7 +44,7 @@ The engine and the React layer are intentionally kept separate within the same f
 | `dog` | circle | `TOKEN_RADIUS = 0.75` | Player-controlled |
 | `herd` | circle | `HERD_RADIUS = 2.5` | 5" diameter template |
 | `loose` | circle | `TOKEN_RADIUS = 0.75` | Escaped animals |
-| `pen` | rectangle with 3 walls | defined per scenario | Goal zone with solid walls on 3 sides |
+| `pen` | rectangle with 3 walls | defined per scenario | Goal zone with solid walls on 3 sides; victory when herd center is inside |
 
 ### Game state shape
 
@@ -60,16 +60,16 @@ The engine and the React layer are intentionally kept separate within the same f
   escapedCount: number,
   events:       string[],   // log messages, newest appended last
   rng:          () => number, // injectable — Math.random in production
-  terrain:      [{ id, type, x, y, w, h }, ...],  // see Terrain section
+  terrain:      [{ id, type, x, y, w, h }, ...],  // see Terrain section (types: 'impassable', 'labouring', 'antithetical')
 }
 ```
 
 ### Turn phases (in order)
 
-1. **`dumb_animals`** — Each animal (herd + loose) moves D6" in a random direction, furthest from dog first. Herd is clamped to board edge on contact (counts as escape). Loose animals that touch the board edge are removed (escaped).
-2. **`come_by`** — Player moves the dog up to 12". Dog cannot pass through herd or loose animals. Accepts `null` action (dog holds position).
+1. **`dumb_animals`** — Each animal (herd + loose) moves D6" in a random direction, furthest from dog first. All entities stop at pen walls, impassable terrain, and when contacting the dog or other loose animals. Loose animals CAN move into contact with the herd (for rejoining). Herd is clamped to board edge on contact (counts as escape). Loose animals that touch the board edge are removed (escaped).
+2. **`come_by`** — Player moves the dog up to 12". Dog cannot pass through herd, loose animals, pen walls, or impassable terrain. Accepts `null` action (dog holds position).
 3. **`loose_animal`** — If dog is within 8" of herd, roll D8. If roll ≥ distance, a loose animal spawns D6" from herd in a random direction.
-4. **`move_herd`** — Each animal is pushed directly away from the dog until ≥10" gap, furthest first. Animals stop at board edges, other entities, or impassable terrain.
+4. **`move_herd`** — Each animal is pushed directly away from the dog until ≥10" gap, furthest first. Animals stop at board edges, pen walls, impassable terrain, or when contacting other entities. **Victory condition:** Game transitions to `finished` phase if the herd's center point (x, y) is inside the pen rectangle.
 
 ### `processTurn(state, action, targetPhase?)`
 
@@ -107,6 +107,19 @@ DOG_SPOOK_RANGE = 8   // distance within which dog can spook herd
 HERD_CLEARANCE = 10   // target gap between any animal and the dog after move_herd
 ```
 
+### Collision resolution
+
+`resolveMovement(animal, targetX, targetY, state, escapedIds, checkEntityCollisions)` is a shared helper that handles all collision detection and resolution:
+
+- Checks pen wall collisions using ray-casting with `raySegmentIntersect`
+- Checks impassable terrain collisions using ray-casting
+- Optionally checks entity-to-entity collisions (when `checkEntityCollisions=true`)
+- For loose animals: allows movement into contact with herd (for rejoining), but blocks contact with dog and other loose animals
+- For herd: blocks contact with all entities (dog and loose animals)
+- Returns `{ x, y, blocked, obstacle }` with final position and collision information
+
+Used by both `phaseDumbAnimals` and `phaseMoveHerd` to ensure consistent collision behavior.
+
 ---
 
 ## React app architecture
@@ -125,14 +138,22 @@ After each player action, entity positions animate in two sequences of 500ms sta
 
 **First sequence (move_herd phase):**
 1. **Dog** moves to new position
-2. **Loose animals** flee (pushed by dog, or newly spooked) — skipped if none
+2. **Loose animals** flee (pushed by dog, newly spooked, or rejoining) — skipped if none
+   - Animals that rejoined during move_herd animate moving to herd center with green tint, then disappear
 3. **Herd** is pushed back by dog
 
 **Second sequence (dumb_animals phase):**
-4. **Loose animals** wander randomly — skipped if none
+4. **Loose animals** wander randomly (or rejoin) — skipped if none
+   - Animals that rejoined during dumb_animals animate moving to herd center with green tint, then disappear
 5. **Herd** wanders randomly
 
 Each stage is 500ms and is skipped if there's no movement. The animation uses `processTurn` twice: first to capture state after move_herd (before dumb_animals), then to get the final state (after dumb_animals).
+
+**Rejoining animation:** When a loose animal rejoins the herd, it:
+- Appears in the animation with a green stroke/fill (vs. normal yellow)
+- Animates smoothly from its last position to the herd center
+- Disappears after reaching the herd (filtered out when animation stage completes)
+- Detection: checks game state events for "{animal.id}" + "rejoined" messages
 
 **Key state:**
 
@@ -170,7 +191,39 @@ const SCENARIOS = [
 
 Each scenario `state` object follows the full game state shape (minus `rng`, which is injected as `Math.random` at runtime).
 
-**Current scenarios:** Walk Up — dog starts bottom-left, herd near centre-left, pen (8"×6") on the right with solid walls on top/right/bottom and open on the left side for entry.
+**Current scenarios:**
+- **Walk Up** — dog starts bottom-left, herd near centre-left, pen (8"×6") on the right with solid walls on top/right/bottom and open on the left side for entry.
+- **Rotten Bridge** — pen in top right corner (opens bottom), two impassable river sections create an 8" gap in the middle for crossing.
+- **Dead Mount** — pen in top right corner (opens bottom), entire right half of the board is labouring terrain. Herd starts 10" from left edge, 2" from bottom.
+- **Bog's Edge** — pen near bottom center (opens right), 8" wide murky water (antithetical terrain) runs along right side of board 6" from edge. Herd starts 10" from left, 8" from top.
+
+### Terrain
+
+Terrain rectangles modify gameplay based on their type:
+
+**Impassable terrain** (`type: 'impassable'`):
+- Blocks all entity movement (dog, herd, loose animals)
+- Ray-casting collision detection using `raySegmentIntersect`
+- Entities stop ~0.01" before contact
+- Rendered as blue water with ripples
+
+**Labouring terrain** (`type: 'labouring'`):
+- If an entity's center point is in labouring terrain during `dumb_animals` or `move_herd` phases, its movement distance is halved (rounded up)
+- Example: D6 roll of 5 → moves ceil(5/2) = 3"
+- Example: Push distance of 7" → moves ceil(7/2) = 4"
+- Does not block movement, only slows it
+- Rendered as brownish mud with diagonal texture lines
+- Checked via `isInLabouringTerrain(x, y, terrain)`
+
+**Antithetical terrain** (`type: 'antithetical'`):
+- If an entity's center point is in antithetical terrain during `move_herd` phase AND is within 10" of the dog, it is pulled TOWARD the dog instead of pushed away
+- Pull distance = 10" - current distance from dog
+- Example: Herd at 8" from dog → normally pushed 2" away, but antithetical pulls 2" toward dog instead
+- Entity stops if it would contact the dog (uses `resolveMovement` for collision detection)
+- Only applies during `move_herd` phase (not `dumb_animals`)
+- Only applies if within 10" clearance range
+- Rendered as dark green/teal murky water with swirling circles
+- Checked via `isInAntitheticalTerrain(x, y, terrain)`
 
 ### Pen Wall Collision
 

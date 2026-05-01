@@ -964,6 +964,7 @@ describe('Terrain collision in phaseDumbAnimals', () => {
     const terrain = [{ id: 'water', type: 'impassable', x: 15, y: 12, w: 2, h: 4 }]; // wall left edge at x=14
     const looseAnimals = [{ id: 'la1', type: 'loose', x: 12, y: 12, radius: TOKEN_RADIUS }];
     const s = makeState({
+      dog: { id: 'dog', type: 'dog', x: 3, y: 3, radius: TOKEN_RADIUS }, // Move dog away from loose animal
       looseAnimals,
       terrain,
       rng: fixedRng(0), // roll=1, angle=0° → moves 1" east
