@@ -1630,7 +1630,7 @@ export default function App() {
           fontSize:17, fontWeight:700, color:'#3a2e1a',
         }}>
           Herding<sup style={{fontSize:9,fontFamily:'monospace',color:'#7a6a48',fontWeight:400}}>28</sup>
-          {' '}— Trial No. 1
+          {' '}
         </div>
         <div style={{
           fontSize:9, textTransform:'uppercase', letterSpacing:'0.1em',

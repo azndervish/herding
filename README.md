@@ -1,70 +1,172 @@
-# Getting Started with Create React App
+# Herding28
 
-This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
+A mobile-first React web app implementation of **Herding28**, a solo non-combat tabletop miniatures game. Guide your herding dog to move a flock toward the pen across a 24"×24" board while managing random animal behavior.
 
-## Available Scripts
+## 🎮 Game Overview
 
-In the project directory, you can run:
+Control a herding dog to move animals toward the pen. Each turn:
+1. **Dumb Animals** — Animals wander randomly (D6" in random direction)
+2. **Come-by** — Move your dog up to 12"
+3. **Loose Animal** — Risk of animals breaking away if too close
+4. **Move Herd** — Push animals away from dog (10" clearance)
 
-### `npm start`
+**Victory:** Get the herd's center point inside the pen  
+**Challenge:** Keep animals from escaping off the board edge
 
-Runs the app in the development mode.\
-Open [http://localhost:3000](http://localhost:3000) to view it in your browser.
+## 🚀 Quick Start
 
-The page will reload when you make changes.\
-You may also see any lint errors in the console.
+```bash
+# Install dependencies
+npm install
 
-### `npm test`
+# Run development server
+npm start
 
-Launches the test runner in the interactive watch mode.\
-See the section about [running tests](https://facebook.github.io/create-react-app/docs/running-tests) for more information.
+# Run tests
+node src/appEngine.test.js
+```
 
-### `npm run build`
+Open [http://localhost:3000](http://localhost:3000) to play.
 
-Builds the app for production to the `build` folder.\
-It correctly bundles React in production mode and optimizes the build for the best performance.
+## 🗺️ Scenarios
 
-The build is minified and the filenames include the hashes.\
-Your app is ready to be deployed!
+- **Walk Up** — Basic scenario with clear path to pen
+- **Rotten Bridge** — Two impassable rivers with 8" crossing gap
+- **Dead Mount** — Right half is labouring terrain (halves movement)
+- **Bog's Edge** — Murky water pulls animals toward dog (antithetical terrain)
 
-See the section about [deployment](https://facebook.github.io/create-react-app/docs/deployment) for more information.
+## 🎯 Features
 
-### `npm run eject`
+### Terrain Types
 
-**Note: this is a one-way operation. Once you `eject`, you can't go back!**
+**Impassable** — Blocks all movement (rendered as blue water)
 
-If you aren't satisfied with the build tool and configuration choices, you can `eject` at any time. This command will remove the single build dependency from your project.
+**Labouring** — Halves movement distance when entity's center is in terrain (rendered as brown mud)
+- Example: D6 roll of 5 → moves 3" (ceil(5/2))
 
-Instead, it will copy all the configuration files and the transitive dependencies (webpack, Babel, ESLint, etc) right into your project so you have full control over them. All of the commands except `eject` will still work, but they will point to the copied scripts so you can tweak them. At this point you're on your own.
+**Antithetical** — Pulls animals TOWARD dog instead of pushing away during Move Herd phase (rendered as dark teal murky water)
+- Only applies within 10" of dog
+- Example: At 8" from dog → pulled 2" closer instead of pushed 2" away
 
-You don't have to ever use `eject`. The curated feature set is suitable for small and middle deployments, and you shouldn't feel obligated to use this feature. However we understand that this tool wouldn't be useful if you couldn't customize it when you are ready for it.
+### Collision Detection
 
-## Learn More
+- Pen walls with ray-casting collision detection
+- Entity-to-entity collision with sub-inch precision
+- Terrain obstacles
+- Loose animals can rejoin herd on contact
 
-You can learn more in the [Create React App documentation](https://facebook.github.io/create-react-app/docs/getting-started).
+### Animation System
 
-To learn React, check out the [React documentation](https://reactjs.org/).
+- Smooth 500ms animations for each phase
+- Visual feedback for rejoining animals (green tint)
+- Separate animation sequences for move_herd and dumb_animals phases
 
-### Code Splitting
+## 🏗️ Architecture
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/code-splitting](https://facebook.github.io/create-react-app/docs/code-splitting)
+```
+src/
+├── App.js              - Complete game: engine + React UI
+├── appEngine.js        - Auto-generated engine export for testing
+├── appEngine.test.js   - Engine unit tests (Node test runner)
+└── index.js           - React entry point
+```
 
-### Analyzing the Bundle Size
+**Key Design:** Engine and UI are in the same file but cleanly separated. The engine section (pure JS, no React) can be extracted for testing.
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size](https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size)
+## 🧪 Testing
 
-### Making a Progressive Web App
+```bash
+# Run all tests
+node src/appEngine.test.js
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app](https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app)
+# Tests cover:
+# - All game phases (dumb_animals, come_by, loose_animal, move_herd, deployment)
+# - Terrain collision (impassable, labouring, antithetical)
+# - Edge cases (board boundaries, entity overlap, rejoining)
+# - Victory conditions
+```
 
-### Advanced Configuration
+All 106 tests pass ✓
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/advanced-configuration](https://facebook.github.io/create-react-app/docs/advanced-configuration)
+## 🎨 Visual Design
 
-### Deployment
+- **Board:** 24"×24" grid with 1" and 5" markers
+- **Dog:** Dark blue circle (0.75" radius)
+- **Herd:** Light green circle with sheep texture (2.5" radius)
+- **Loose Animals:** Yellow circles with labels (0.75" radius)
+- **Pen:** Beige rectangle with 3 solid walls, 1 open side
+- **Terrain:** Color-coded with visual textures
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/deployment](https://facebook.github.io/create-react-app/docs/deployment)
+## 📐 Coordinate System
 
-### `npm run build` fails to minify
+- Origin at top-left (0, 0)
+- All positions in game-inches (not pixels)
+- SVG rendering converts via `toPx(inches)`
+- Board: 24"×24" → 480×480px viewport
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify](https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify)
+## 🔧 Development
+
+### Regenerating Engine Export
+
+After editing `App.js` engine code, regenerate the test export:
+
+```bash
+cd src
+node --input-type=module -e "
+import { readFileSync, writeFileSync } from 'fs';
+const content = readFileSync('App.js', 'utf8');
+const start   = content.indexOf('// ENGINE (inlined)');
+const engEnd  = content.indexOf('// SCENARIO');
+const scenEnd = content.indexOf('// BOARD SVG');
+const engine  = content.slice(start, engEnd).split('\n')
+  .filter(l => !l.trim().startsWith('// ─') && l.trim() !== '// ENGINE (inlined)')
+  .join('\n');
+const scenario = content.slice(engEnd, scenEnd).split('\n')
+  .filter(l => !l.trim().startsWith('// ─') && l.trim() !== '// SCENARIOS')
+  .join('\n');
+writeFileSync('appEngine.js', \`// appEngine.js — auto-generated from App.js\n\n\${engine}\n\n\${scenario}\n\nexport { /* exports */ };\`);
+"
+```
+
+### Project Structure
+
+See [CLAUDE.md](./CLAUDE.md) for detailed documentation on:
+- Game engine internals
+- Turn phase mechanics
+- Animation system
+- Collision detection algorithms
+- Scenario definitions
+
+## 📱 Mobile Support
+
+- Touch-friendly controls
+- Responsive layout (max-width: 480px)
+- Tap to preview dog movement
+- Clear visual feedback for invalid moves
+
+## 🎲 Game Rules
+
+- **Dog Movement:** Up to 12" per turn
+- **Spook Range:** Within 8" of herd
+- **Clearance:** Animals pushed to 10" from dog
+- **Board Edge:** Animals touching edge are removed (escaped)
+- **Victory:** Herd center inside pen rectangle
+
+## 📦 Technologies
+
+- React 18 (Hooks)
+- Create React App
+- Node.js test runner (built-in)
+- Pure SVG rendering (no canvas)
+
+## 📄 License
+
+This is a digital implementation of a tabletop miniatures game.
+
+## 🤝 Contributing
+
+This is a personal project, but feel free to fork and experiment!
+
+---
+
+**Made with Claude Code**
