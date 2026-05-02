@@ -9,6 +9,7 @@ const TOKEN_RADIUS  = 0.75;
 const DOG_MOVE_MAX  = 12;
 const DOG_SPOOK_RANGE = 8;
 const HERD_CLEARANCE  = 10;
+const INCHES_PER_FRAME = 2; // Dog sprite animation: inches traveled per frame change
 
 function dist(a, b) { return Math.sqrt((a.x-b.x)**2 + (a.y-b.y)**2); }
 
@@ -405,6 +406,8 @@ function phaseComeBy(state, action) {
   if (!action || action.type === 'end_turn') {
     console.log(`[comeBy T${s.turn}] dog holds position`);
     events.push('Come-by: Dog holds position.');
+    // Preserve facing when dog doesn't move
+    if (!s.dog.facing) s.dog.facing = 'right';
     s.events = [...s.events, ...events]; s.phase = 'loose_animal'; return s;
   }
   if (action.type !== 'move_dog') throw new Error(`Unknown action: ${action.type}`);
@@ -442,6 +445,10 @@ function phaseComeBy(state, action) {
   // Use whichever blocker is closest
   const blockDist = Math.min(wallBlockDist, terrainBlockDist, closestBlock);
 
+  // Calculate facing direction based on movement
+  const deltaX = target.x - s.dog.x;
+  const facing = deltaX < 0 ? 'left' : 'right';
+
   if (blockDist < Infinity) {
     const dir = unitVector(s.dog, target);
     const stopDist = Math.max(0, blockDist - 0.01);
@@ -459,6 +466,10 @@ function phaseComeBy(state, action) {
     console.log(`[comeBy T${s.turn}] dog moved to ${_pos(s.dog)}`);
     events.push(`Come-by: Dog moves to (${s.dog.x.toFixed(1)}, ${s.dog.y.toFixed(1)}).`);
   }
+
+  // Update facing direction
+  s.dog.facing = facing;
+
   _checkOob('comeBy:exit | dog', s.dog, s.boardSize);
   s.events = [...s.events, ...events]; s.phase = 'loose_animal'; return s;
 }
@@ -547,12 +558,24 @@ function phaseMoveHerd(state) {
 
     const wouldEscape = targetX < animal.radius || targetY < animal.radius ||
                         targetX > boardSize - animal.radius || targetY > boardSize - animal.radius;
+
+    let clampedTarget = { x: targetX, y: targetY };
     if (wouldEscape) {
-      const newX = Math.max(animal.radius, Math.min(boardSize - animal.radius, targetX));
-      const newY = Math.max(animal.radius, Math.min(boardSize - animal.radius, targetY));
-      console.warn(`[moveHerd T${s.turn}] ${animal.id} would escape at (${targetX.toFixed(2)},${targetY.toFixed(2)}) — clamping`);
+      // Clamp to board edges but still check for pen walls
+      clampedTarget.x = Math.max(animal.radius, Math.min(boardSize - animal.radius, targetX));
+      clampedTarget.y = Math.max(animal.radius, Math.min(boardSize - animal.radius, targetY));
+      console.warn(`[moveHerd T${s.turn}] ${animal.id} would escape at (${targetX.toFixed(2)},${targetY.toFixed(2)}) — clamping to (${clampedTarget.x.toFixed(2)},${clampedTarget.y.toFixed(2)})`);
+    }
+
+    // Always run collision detection (including pen walls) even after clamping
+    const result = resolveMovement(animal, clampedTarget.x, clampedTarget.y, s, escapedIds);
+    let newX = result.x;
+    let newY = result.y;
+    let blocked = result.blocked;
+
+    // If movement was clamped due to board edge, count it as an escape
+    if (wouldEscape) {
       if (animal.type === 'herd') {
-        s.herd.x = newX; s.herd.y = newY;
         s.escapedCount = (s.escapedCount || 0) + 1;
         events.push(`Move Herd: Herd hit the board edge! +1 escape (${s.escapedCount} total).`);
       } else {
@@ -560,12 +583,7 @@ function phaseMoveHerd(state) {
         s.escapedCount = (s.escapedCount || 0) + 1;
         events.push(`Move Herd: ${animal.id} escaped off the board! (${s.escapedCount} total)`);
       }
-      continue;
     }
-
-    const result = resolveMovement(animal, targetX, targetY, s, escapedIds);
-    let newX = result.x;
-    let newY = result.y;
 
     if (result.obstacle) {
       console.log(`[moveHerd T${s.turn}] ${animal.id} blocked by ${result.obstacle}, stopped at (${newX.toFixed(2)},${newY.toFixed(2)})`);
@@ -693,7 +711,7 @@ function processTurn(state, action, targetPhase) {
 
 const WALK_UP = {
   boardSize: 24,
-  dog:  { id: 'dog',  type: 'dog',  x: 1,  y: 12, radius: TOKEN_RADIUS },  // Default position (will be overridden by deployment)
+  dog:  { id: 'dog',  type: 'dog',  x: 1,  y: 12, radius: TOKEN_RADIUS, facing: 'right' },  // Default position (will be overridden by deployment)
   herd: { id: 'herd', type: 'herd', x: 6,  y: 10, radius: HERD_RADIUS  },
   pen:  { id: 'pen',  type: 'pen',  x: 18, y: 10, w: 8, h: 6, openSide: 'left' },
   looseAnimals: [],
@@ -707,7 +725,7 @@ const WALK_UP = {
 
 const ROTTEN_BRIDGE = {
   boardSize: 24,
-  dog:  { id: 'dog',  type: 'dog',  x: 1,  y: 12, radius: TOKEN_RADIUS },
+  dog:  { id: 'dog',  type: 'dog',  x: 1,  y: 12, radius: TOKEN_RADIUS, facing: 'right' },
   herd: { id: 'herd', type: 'herd', x: 6,  y: 12, radius: HERD_RADIUS  },
   pen:  { id: 'pen',  type: 'pen',  x: 22 - 4, y: 4, w: 8, h: 8, openSide: 'bottom' }, // 2" from right edge, 0" from top
   looseAnimals: [],
@@ -724,7 +742,7 @@ const ROTTEN_BRIDGE = {
 
 const DEAD_MOUNT = {
   boardSize: 24,
-  dog:  { id: 'dog',  type: 'dog',  x: 1,  y: 12, radius: TOKEN_RADIUS },
+  dog:  { id: 'dog',  type: 'dog',  x: 1,  y: 12, radius: TOKEN_RADIUS, facing: 'right' },
   herd: { id: 'herd', type: 'herd', x: 10, y: 22, radius: HERD_RADIUS  }, // 10" from left (24-10=14" from right), 2" from bottom (24-2=22)
   pen:  { id: 'pen',  type: 'pen',  x: 20, y: 4, w: 8, h: 8, openSide: 'bottom' }, // Top right corner: center at (20,4), opens bottom
   looseAnimals: [],
@@ -740,7 +758,7 @@ const DEAD_MOUNT = {
 
 const BOGS_EDGE = {
   boardSize: 24,
-  dog:  { id: 'dog',  type: 'dog',  x: 1,  y: 12, radius: TOKEN_RADIUS },
+  dog:  { id: 'dog',  type: 'dog',  x: 1,  y: 12, radius: TOKEN_RADIUS, facing: 'right' },
   herd: { id: 'herd', type: 'herd', x: 10, y: 8,  radius: HERD_RADIUS  }, // 10" from left, 8" from top
   pen:  { id: 'pen',  type: 'pen',  x: 10, y: 18, w: 8, h: 8, openSide: 'right' }, // 8" from right (24-8=16, center at 12), 2" from bottom (24-2=22, center at 22), 8"x4", opens right
   looseAnimals: [],
@@ -1013,12 +1031,40 @@ function LooseAnimalEntity({ la }) {
   );
 }
 
-function DogEntity({ dog }) {
+function DogEntity({ dog, dogTypeId = 'blue', animFrame = 0 }) {
   const cx=toPx(dog.x), cy=toPx(dog.y), r=toPx(dog.radius);
+  const dogType = DOG_TYPES.find(dt => dt.id === dogTypeId) || DOG_TYPES[0];
+  const facing = dog.facing || 'right'; // Default to right if not set
+
+  if (dogType.type === 'sprite') {
+    // Sprite is designed in 24x24 viewBox with center at (12, 12)
+    // Scale it so the overall sprite fits within ~2.5x the dog radius
+    const scale = (r * 2.5) / 12; // Scale based on sprite center point (12)
+
+    return (
+      <g>
+        {/* Shadow */}
+        <ellipse cx={cx+1} cy={cy+r*1.2+1} rx={r*0.8} ry={r*0.3} fill="#000" opacity={0.2}/>
+
+        {/* Sprite - translate to position, then scale around origin */}
+        <g transform={`translate(${cx}, ${cy}) scale(${scale}) translate(-12, -12)`}>
+          <ChihuahuaSprite frame={animFrame} facing={facing} />
+        </g>
+
+        {/* Label */}
+        <text x={cx} y={cy+r*1.8+10} textAnchor="middle"
+          fontSize={9} fontFamily="monospace" fontWeight="600" fill="#3a2e1a">
+          DOG
+        </text>
+      </g>
+    );
+  }
+
+  // Default circle rendering for Bluey
   return (
     <g>
       <circle cx={cx+1} cy={cy+1} r={r} fill="#304058" opacity={0.25}/>
-      <circle cx={cx} cy={cy} r={r} fill="#3a5878" stroke="#1a3858" strokeWidth={1.8}/>
+      <circle cx={cx} cy={cy} r={r} fill={dogType.color} stroke={dogType.stroke} strokeWidth={1.8}/>
       <circle cx={cx-r*.3} cy={cy-r*.3} r={r*.28} fill="#aaccee" opacity={0.65}/>
       <text x={cx} y={cy+r+10} textAnchor="middle"
         fontSize={9} fontFamily="monospace" fontWeight="600" fill="#1a3858">
@@ -1063,6 +1109,161 @@ const PHASE_META = {
   move_herd:     { label: "Move Herd",     color: "#c8b888", border: "#a89868", text: "#3a2e1a" },
   finished:      { label: "Finished!",     color: "#a0c0a0", border: "#6a9060", text: "#1a3a1a" },
 };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DOG SELECTOR
+// ─────────────────────────────────────────────────────────────────────────────
+
+const DOG_TYPES = [
+  { id: 'blue', name: 'Bluey', type: 'circle', color: '#4a7ba7', stroke: '#2a5577' },
+  { id: 'peaches', name: 'Peaches', type: 'sprite', color: '#e8a868', stroke: '#c88038' },
+];
+
+// Chihuahua sprite component - uses PNG image
+function ChihuahuaSprite({ frame = 0, facing = 'right' }) {
+  // Alternate between idle (chihuahua.png) and run (chihuahua_run.png)
+  const isRunFrame = frame % 2 === 1;
+  const imageSrc = isRunFrame ? "/herding/chihuahua_run.png" : "/herding/chihuahua.png";
+
+  // Flip horizontally if facing left
+  const transform = facing === 'left' ? 'scale(-1, 1) translate(-24, 0)' : '';
+
+  return (
+    <g transform={transform}>
+      <image
+        href={imageSrc}
+        x="0"
+        y="0"
+        width="24"
+        height="24"
+        preserveAspectRatio="xMidYMid meet"
+      />
+    </g>
+  );
+}
+
+// Generic dog renderer for selector (standalone SVG wrapper)
+function DogAvatar({ dogType, size = 24 }) {
+  if (dogType.type === 'sprite') {
+    return (
+      <svg width={size} height={size} viewBox="0 0 24 24">
+        <ChihuahuaSprite />
+      </svg>
+    );
+  }
+  // Default circle rendering
+  const r = size * 0.375; // 9/24 ratio to match original
+  return (
+    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+      <circle
+        cx={size/2}
+        cy={size/2}
+        r={r}
+        fill={dogType.color}
+        stroke={dogType.stroke}
+        strokeWidth={size/12}
+      />
+    </svg>
+  );
+}
+
+function DogSelector({ selectedDogId, onSelect, onClose }) {
+  return (
+    <div style={{
+      position: 'fixed',
+      top: 0,
+      left: 0,
+      right: 0,
+      bottom: 0,
+      background: 'rgba(0,0,0,0.5)',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      zIndex: 1000,
+    }}>
+      <div style={{
+        background: '#e8dfc8',
+        border: '2px solid #8a7a5a',
+        borderRadius: 8,
+        padding: 20,
+        minWidth: 280,
+        boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
+      }}>
+        <div style={{
+          fontSize: 14,
+          fontWeight: 600,
+          color: '#3a2e1a',
+          marginBottom: 16,
+          textAlign: 'center',
+        }}>
+          Select Your Dog
+        </div>
+
+        <div style={{
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 10,
+          marginBottom: 16,
+        }}>
+          {DOG_TYPES.map(dogType => {
+            const isSelected = selectedDogId === dogType.id;
+            return (
+              <button
+                key={dogType.id}
+                onClick={() => {
+                  onSelect(dogType.id);
+                  onClose();
+                }}
+                style={{
+                  padding: '10px 12px',
+                  border: `2px solid ${isSelected ? dogType.stroke : '#9a8a6a'}`,
+                  borderRadius: 6,
+                  background: isSelected ? '#fff' : '#ddd3b8',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 10,
+                  transition: 'all 0.15s',
+                  boxShadow: isSelected ? '0 0 0 3px rgba(74,123,167,0.2)' : 'none',
+                }}
+              >
+                <DogAvatar dogType={dogType} size={24} />
+                <span style={{
+                  fontSize: 13,
+                  color: '#3a2e1a',
+                  fontWeight: isSelected ? 600 : 400,
+                  flex: 1,
+                }}>
+                  {dogType.name}
+                </span>
+                {isSelected && (
+                  <span style={{ fontSize: 16, color: '#2a5577' }}>✓</span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+
+        <button
+          onClick={onClose}
+          style={{
+            width: '100%',
+            padding: '8px',
+            border: '1.5px solid #8a7a5a',
+            borderRadius: 4,
+            background: '#ddd3b8',
+            color: '#3a2e1a',
+            fontSize: 12,
+            fontWeight: 600,
+            cursor: 'pointer',
+          }}
+        >
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // MAP SELECTOR
@@ -1159,7 +1360,7 @@ function lerp(a, b, t) { return a + (b - a) * t; }
 /** Extract just the renderable positions from a game state. */
 function snapshotPos(state) {
   return {
-    dog:         { x: state.dog.x,  y: state.dog.y  },
+    dog:         { x: state.dog.x,  y: state.dog.y, facing: state.dog.facing || 'right' },
     herd:        { x: state.herd.x, y: state.herd.y },
     looseAnimals: state.looseAnimals.map(la => ({
       id: la.id, radius: la.radius, x: la.x, y: la.y,
@@ -1168,6 +1369,19 @@ function snapshotPos(state) {
 }
 
 export default function App() {
+  // ── Preload sprite images ─────────────────────────────────────────────────
+  useEffect(() => {
+    // Preload chihuahua sprites to avoid flickering on first animation
+    const preloadImages = [
+      '/herding/chihuahua.png',
+      '/herding/chihuahua_run.png',
+    ];
+    preloadImages.forEach(src => {
+      const img = new Image();
+      img.src = src;
+    });
+  }, []);
+
   // ── Screen routing ───────────────────────────────────────────────────────
   const [screen,    setScreen]      = useState('select'); // 'select' | 'game'
   const [scenario,  setScenario]    = useState(null);
@@ -1176,6 +1390,8 @@ export default function App() {
   const [gameState, setGameState]   = useState(null);
   const [preview,   setPreview]     = useState(null);
   const [invalid,   setInvalid]     = useState(false);
+  const [selectedDog, setSelectedDog] = useState('peaches'); // Current dog selection
+  const [showDogSelector, setShowDogSelector] = useState(false); // Dog selector modal visibility
   const svgRef = useRef(null);
 
   // ── Animation state ───────────────────────────────────────────────────────
@@ -1248,7 +1464,23 @@ export default function App() {
     if (anim.phase === 'dog') {
       const dx = lerp(anim.fromDog.x, anim.toDog.x, ease);
       const dy = lerp(anim.fromDog.y, anim.toDog.y, ease);
-      setDisplayPos(prev => ({ ...prev, dog: { x: dx, y: dy } }));
+
+      // Calculate animation frame based on distance and progress
+      // Total frames = distance / INCHES_PER_FRAME (rounded)
+      // Frame alternates: 0 (idle), 1 (run), 0 (idle), 1 (run)...
+      const distance = Math.sqrt(
+        (anim.toDog.x - anim.fromDog.x) ** 2 +
+        (anim.toDog.y - anim.fromDog.y) ** 2
+      );
+      const totalFrames = Math.max(1, Math.round(distance / INCHES_PER_FRAME));
+      const currentFrame = t >= 1 ? 0 : Math.floor(ease * totalFrames); // End in idle (frame 0)
+
+      // Determine facing direction based on movement
+      // Only change facing if the dog actually moved (deltaX !== 0)
+      const deltaX = anim.toDog.x - anim.fromDog.x;
+      const facing = deltaX !== 0 ? (deltaX < 0 ? 'left' : 'right') : (anim.fromDog.facing || 'right');
+
+      setDisplayPos(prev => ({ ...prev, dog: { x: dx, y: dy, frame: currentFrame, facing } }));
 
       if (t >= 1) {
         // Skip loose animals stage if there are none
@@ -1378,7 +1610,7 @@ export default function App() {
       const final = processTurn(afterDeployment, null, 'come_by');
 
       // Set up animation state (required for cleanup)
-      anim.fromDog  = { x: afterDeployment.dog.x,  y: afterDeployment.dog.y  };
+      anim.fromDog  = { x: afterDeployment.dog.x,  y: afterDeployment.dog.y, facing: afterDeployment.dog.facing || 'right' };
       anim.toDog    = { x: afterDeployment.dog.x,  y: afterDeployment.dog.y  };
       anim.looseFrames = [];
       anim.fromHerd = { x: afterDeployment.herd.x, y: afterDeployment.herd.y };
@@ -1419,7 +1651,7 @@ export default function App() {
     // ── First animation: move_herd phase (dog + loose + herd movements) ────
 
     // Record from→to for dog
-    anim.fromDog  = { x: prev.dog.x,  y: prev.dog.y  };
+    anim.fromDog  = { x: prev.dog.x,  y: prev.dog.y, facing: prev.dog.facing || 'right' };
     anim.toDog    = { x: afterMoveHerd.dog.x,  y: afterMoveHerd.dog.y  };
 
     // Record from→to for herd
@@ -1695,7 +1927,7 @@ export default function App() {
 
           <HerdEntity herd={herd}/>
           {looseAnimals.map(la => <LooseAnimalEntity key={la.id} la={la}/>)}
-          <DogEntity dog={dog}/>
+          <DogEntity dog={dog} dogTypeId={selectedDog} animFrame={dog.frame || 0}/>
 
           {invalid && (
             <rect width={BOARD_PX} height={BOARD_PX} fill="rgba(200,64,48,0.12)"
@@ -1735,12 +1967,14 @@ export default function App() {
         display:'flex', background:'#ddd3b8',
         borderBottom:'1px solid #b0a07a', borderTop:'1px solid #b0a07a',
       }}>
-        {[
-          { label:'Turn',     value: turn },
-          { label:'Loose',    value: looseAnimals.length },
-          { label:'Escaped',  value: escapedCount, danger: true },
-          { label:'Dog↔Herd', value: dist(dog,herd).toFixed(1)+'"'  , small: true },
-        ].map((s,i,arr) => (
+        {(() => {
+          const score = looseAnimals.length + escapedCount;
+          return [
+            { label:'Turn',     value: turn },
+            { label:'Score',    value: score, danger: true },
+            { label:'Dog↔Herd', value: dist(dog,herd).toFixed(1)+'"'  , small: true },
+          ];
+        })().map((s,i,arr) => (
           <div key={s.label} style={{
             flex:1, textAlign:'center', padding:'7px 4px 6px',
             borderRight: i<arr.length-1 ? '0.5px solid #bfaf90' : 'none',
@@ -1751,7 +1985,7 @@ export default function App() {
             <div style={{
               fontSize: s.small ? 13 : 16,
               fontWeight:600,
-              color: s.danger && escapedCount > 0 ? '#8a3020' : '#3a2e1a',
+              color: s.danger && s.value > 0 ? '#8a3020' : '#3a2e1a',
               lineHeight:1.1,
               paddingTop: s.small ? 2 : 0,
             }}>
@@ -1787,10 +2021,10 @@ export default function App() {
         ) : isDeployment ? (
           <>
             <div style={{fontSize:11,color:'#4a3c22',flex:1}}>
-              {preview ? `Deploy dog at (${preview.x.toFixed(1)}", ${preview.y.toFixed(1)}")?` : 'Tap within the blue zone to adjust position.'}
+              Tap within the blue zone to position your dog.
             </div>
-            {preview && <button onClick={handleCancel} style={btnStyle('ghost')}>Cancel</button>}
-            {preview && <button onClick={handleConfirm} style={btnStyle('primary')}>Deploy</button>}
+            <button onClick={() => setShowDogSelector(true)} style={btnStyle('ghost')}>Select Dog</button>
+            <button onClick={handleConfirm} style={btnStyle('primary')}>Deploy</button>
           </>
         ) : preview ? (
           <>
@@ -1836,6 +2070,15 @@ export default function App() {
           </div>
         ))}
       </div>
+
+      {/* ── Dog selector modal ── */}
+      {showDogSelector && (
+        <DogSelector
+          selectedDogId={selectedDog}
+          onSelect={setSelectedDog}
+          onClose={() => setShowDogSelector(false)}
+        />
+      )}
     </div>
   );
 }
