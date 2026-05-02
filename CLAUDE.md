@@ -195,7 +195,7 @@ Each scenario `state` object follows the full game state shape (minus `rng`, whi
 - **Walk Up** — dog starts bottom-left, herd near centre-left, pen (8"×6") on the right with solid walls on top/right/bottom and open on the left side for entry.
 - **Rotten Bridge** — pen in top right corner (opens bottom), two impassable river sections create an 8" gap in the middle for crossing.
 - **Dead Mount** — pen in top right corner (opens bottom), entire right half of the board is labouring terrain. Herd starts 10" from left edge, 2" from bottom.
-- **Bog's Edge** — pen near bottom center (opens right), 8" wide murky water (antithetical terrain) runs along right side of board 6" from edge. Herd starts 10" from left, 8" from top.
+- **Bog's Edge** — pen near bottom center (opens right), 8" wide murky water (antithetical terrain) runs along right side from x=16 to x=24. Herd starts 10" from left, 8" from top.
 
 ### Terrain
 

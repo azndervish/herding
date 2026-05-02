@@ -516,18 +516,34 @@ function phaseMoveHerd(state) {
       console.log(`[moveHerd T${s.turn}] ${animal.id} already ${d.toFixed(2)}" from dog — no push needed`);
       continue;
     }
-    let needed = HERD_CLEARANCE - d;
 
-    // Check if animal center is in labouring terrain - halve movement (round up)
+    // Check if animal center is in antithetical terrain - pull TOWARD dog instead of pushing away
+    const inAntithetical = isInAntitheticalTerrain(animal.x, animal.y, s.terrain);
     const inLabouring = isInLabouringTerrain(animal.x, animal.y, s.terrain);
-    if (inLabouring) {
-      needed = Math.ceil(needed / 2);
-    }
 
-    const dir = unitVector(s.dog, animal);
-    const targetX = animal.x + dir.x * needed;
-    const targetY = animal.y + dir.y * needed;
-    console.log(`[moveHerd T${s.turn}] ${animal.id}: dist=${d.toFixed(2)}", pushing ${needed.toFixed(2)}"${inLabouring ? ' (labouring)' : ''} → (${targetX.toFixed(2)},${targetY.toFixed(2)})`);
+    let targetX, targetY, needed;
+
+    if (inAntithetical) {
+      // Pull toward dog: distance = 10" - current distance
+      needed = HERD_CLEARANCE - d;
+      const dirToDog = unitVector(animal, s.dog); // Direction TOWARD dog
+      targetX = animal.x + dirToDog.x * needed;
+      targetY = animal.y + dirToDog.y * needed;
+      console.log(`[moveHerd T${s.turn}] ${animal.id}: dist=${d.toFixed(2)}", pulling ${needed.toFixed(2)}" toward dog (antithetical) → (${targetX.toFixed(2)},${targetY.toFixed(2)})`);
+    } else {
+      // Normal push away from dog
+      needed = HERD_CLEARANCE - d;
+
+      // Check if animal center is in labouring terrain - halve movement (round up)
+      if (inLabouring) {
+        needed = Math.ceil(needed / 2);
+      }
+
+      const dir = unitVector(s.dog, animal);
+      targetX = animal.x + dir.x * needed;
+      targetY = animal.y + dir.y * needed;
+      console.log(`[moveHerd T${s.turn}] ${animal.id}: dist=${d.toFixed(2)}", pushing ${needed.toFixed(2)}"${inLabouring ? ' (labouring)' : ''} → (${targetX.toFixed(2)},${targetY.toFixed(2)})`);
+    }
 
     const wouldEscape = targetX < animal.radius || targetY < animal.radius ||
                         targetX > boardSize - animal.radius || targetY > boardSize - animal.radius;
@@ -550,30 +566,14 @@ function phaseMoveHerd(state) {
     const result = resolveMovement(animal, targetX, targetY, s, escapedIds);
     let newX = result.x;
     let newY = result.y;
-    let blocked = result.blocked;
 
     if (result.obstacle) {
       console.log(`[moveHerd T${s.turn}] ${animal.id} blocked by ${result.obstacle}, stopped at (${newX.toFixed(2)},${newY.toFixed(2)})`);
-      events.push(`Move Herd: ${animal.id} ${blocked ? 'stopped — contact with' : 'blocked by'} ${result.obstacle}.`);
+      events.push(`Move Herd: ${animal.id} blocked by ${result.obstacle}.`);
     }
 
-    // Check if animal center is in antithetical terrain - move TOWARDS dog instead
-    const inAntithetical = isInAntitheticalTerrain(animal.x, animal.y, s.terrain);
-    if (inAntithetical && d <= HERD_CLEARANCE) {
-      const pullDistance = HERD_CLEARANCE - d;
-      const dirToDog = unitVector(animal, s.dog); // Direction TOWARD dog (reversed)
-      const pullX = animal.x + dirToDog.x * pullDistance;
-      const pullY = animal.y + dirToDog.y * pullDistance;
-
-      console.log(`[moveHerd T${s.turn}] ${animal.id} in antithetical terrain — pulling ${pullDistance.toFixed(2)}" toward dog`);
-
-      // Check if pulling would cause contact with dog
-      const pullResult = resolveMovement(animal, pullX, pullY, s, escapedIds);
-      newX = pullResult.x;
-      newY = pullResult.y;
-      blocked = pullResult.blocked;
-
-      events.push(`Move Herd: ${animal.id} drawn ${pullDistance.toFixed(1)}" toward dog (antithetical terrain).`);
+    if (inAntithetical) {
+      events.push(`Move Herd: ${animal.id} drawn ${needed.toFixed(1)}" toward dog (antithetical terrain).`);
     }
     // Update entity position
     if (animal.type === 'herd') {
@@ -742,14 +742,14 @@ const BOGS_EDGE = {
   boardSize: 24,
   dog:  { id: 'dog',  type: 'dog',  x: 1,  y: 12, radius: TOKEN_RADIUS },
   herd: { id: 'herd', type: 'herd', x: 10, y: 8,  radius: HERD_RADIUS  }, // 10" from left, 8" from top
-  pen:  { id: 'pen',  type: 'pen',  x: 12, y: 22, w: 8, h: 4, openSide: 'right' }, // 8" from right (24-8=16, center at 12), 2" from bottom (24-2=22, center at 22), 8"x4", opens right
+  pen:  { id: 'pen',  type: 'pen',  x: 10, y: 18, w: 8, h: 8, openSide: 'right' }, // 8" from right (24-8=16, center at 12), 2" from bottom (24-2=22, center at 22), 8"x4", opens right
   looseAnimals: [],
   escapedCount: 0,
   events: [],
   turn: 1,
   phase: 'deployment',
   terrain: [
-    { id: 'murky_water', type: 'antithetical', x: 20, y: 12, w: 8, h: 24 }, // 8" wide, runs full height, 6" from right edge means left edge at x=18 (24-6=18), center at x=20 (18+4)
+    { id: 'murky_water', type: 'antithetical', x: 20, y: 12, w: 8, h: 24 }, // 8" wide strip along right side: spans x=16 to x=24, center at x=20
   ],
   rng: Math.random,
 };
