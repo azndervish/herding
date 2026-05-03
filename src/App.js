@@ -989,21 +989,50 @@ function SpookRing({ dog }) {
 
 function HerdEntity({ herd }) {
   const cx=toPx(herd.x), cy=toPx(herd.y), r=toPx(herd.radius);
-  const blobs=[{dx:-.55,dy:-.35},{dx:.45,dy:-.28},{dx:-.15,dy:.45},{dx:.5,dy:.42},{dx:.02,dy:-.7}];
+
+  // Sheep positions - arranged in a natural cluster within the herd radius
+  const sheepPositions = [
+    {dx:-.6, dy:-.4},  {dx:.5, dy:-.3},  {dx:-.2, dy:.5},
+    {dx:.55, dy:.45}, {dx:0, dy:-.7},   {dx:-.65, dy:.2},
+    {dx:.3, dy:.1},   {dx:-.3, dy:-.6}, {dx:.65, dy:-.55}
+  ];
+
+  // Sheep sprite size - each sheep is ~1" (game inches), scaled to fit nicely in herd
+  const sheepSize = toPx(0.8);
+
   return (
     <g>
-      <circle cx={cx+2} cy={cy+2} r={r} fill="#9a9070" opacity={0.18}/>
-      <circle cx={cx} cy={cy} r={r} fill="#d8f0c0" stroke="#5a8040"
-        strokeWidth={2} strokeDasharray="4,2.5"/>
-      {blobs.map((o,i)=> {
-        const bx=cx+o.dx*(r-6), by=cy+o.dy*(r-6);
-        const br=Math.min(r*0.22, 7);
-        return Math.sqrt(o.dx**2+o.dy**2)*(r-6) < r-6 ? (
-          <circle key={i} cx={bx} cy={by} r={br}
-            fill="#f4f0e0" stroke="#9ab878" strokeWidth={0.5}/>
-        ) : null;
+      {/* Shadow */}
+      <ellipse cx={cx+2} cy={cy+2} rx={r} ry={r*0.9} fill="#9a9070" opacity={0.15}/>
+
+      {/* Collision reference circle - dotted green outline only */}
+      <circle cx={cx} cy={cy} r={r} fill="none" stroke="#5a8040"
+        strokeWidth={2} strokeDasharray="4,2.5" opacity={0.6}/>
+
+      {/* Render sheep sprites */}
+      {sheepPositions.map((pos, i) => {
+        // Position sheep within the herd radius
+        const sx = cx + pos.dx * (r - sheepSize/2);
+        const sy = cy + pos.dy * (r - sheepSize/2);
+
+        // Random rotation for variety (seeded by index for consistency)
+        const rotation = (i * 137.5) % 360;
+
+        return (
+          <g key={i} transform={`translate(${sx}, ${sy}) rotate(${rotation})`}>
+            <image
+              href="/herding/sheep.png"
+              x={-sheepSize/2}
+              y={-sheepSize/2}
+              width={sheepSize}
+              height={sheepSize}
+              preserveAspectRatio="xMidYMid meet"
+            />
+          </g>
+        );
       })}
-      <circle cx={cx} cy={cy} r={r*.27} fill="#5a8040"/>
+
+      {/* Label */}
       <text x={cx} y={cy+r+15} textAnchor="middle"
         fontSize={11} fontFamily="monospace" fontWeight="600" fill="#3a5a20">
         HERD
@@ -1031,43 +1060,34 @@ function LooseAnimalEntity({ la }) {
   );
 }
 
-function DogEntity({ dog, dogTypeId = 'blue', animFrame = 0 }) {
+function DogEntity({ dog, dogTypeId = 'peaches', animFrame = 0 }) {
   const cx=toPx(dog.x), cy=toPx(dog.y), r=toPx(dog.radius);
   const dogType = DOG_TYPES.find(dt => dt.id === dogTypeId) || DOG_TYPES[0];
   const facing = dog.facing || 'right'; // Default to right if not set
 
-  if (dogType.type === 'sprite') {
-    // Sprite is designed in 24x24 viewBox with center at (12, 12)
-    // Scale it so the overall sprite fits within ~2.5x the dog radius
-    const scale = (r * 2.5) / 12; // Scale based on sprite center point (12)
+  // All dogs now use sprite rendering
+  // Sprite is designed in 24x24 viewBox with center at (12, 12)
+  // Scale it so the overall sprite fits within ~2.5x the dog radius
+  const scale = (r * 2.5) / 12; // Scale based on sprite center point (12)
 
-    return (
-      <g>
-        {/* Shadow */}
-        <ellipse cx={cx+1} cy={cy+r*1.2+1} rx={r*0.8} ry={r*0.3} fill="#000" opacity={0.2}/>
-
-        {/* Sprite - translate to position, then scale around origin */}
-        <g transform={`translate(${cx}, ${cy}) scale(${scale}) translate(-12, -12)`}>
-          <ChihuahuaSprite frame={animFrame} facing={facing} />
-        </g>
-
-        {/* Label */}
-        <text x={cx} y={cy+r*1.8+10} textAnchor="middle"
-          fontSize={9} fontFamily="monospace" fontWeight="600" fill="#3a2e1a">
-          DOG
-        </text>
-      </g>
-    );
-  }
-
-  // Default circle rendering for Bluey
   return (
     <g>
-      <circle cx={cx+1} cy={cy+1} r={r} fill="#304058" opacity={0.25}/>
-      <circle cx={cx} cy={cy} r={r} fill={dogType.color} stroke={dogType.stroke} strokeWidth={1.8}/>
-      <circle cx={cx-r*.3} cy={cy-r*.3} r={r*.28} fill="#aaccee" opacity={0.65}/>
-      <text x={cx} y={cy+r+10} textAnchor="middle"
-        fontSize={9} fontFamily="monospace" fontWeight="600" fill="#1a3858">
+      {/* Shadow */}
+      <ellipse cx={cx+1} cy={cy+r*1.2+1} rx={r*0.8} ry={r*0.3} fill="#000" opacity={0.2}/>
+
+      {/* Sprite - translate to position, then scale around origin */}
+      <g transform={`translate(${cx}, ${cy}) scale(${scale}) translate(-12, -12)`}>
+        <DogSprite
+          idleSprite={dogType.idleSprite}
+          runSprite={dogType.runSprite}
+          frame={animFrame}
+          facing={facing}
+        />
+      </g>
+
+      {/* Label */}
+      <text x={cx} y={cy+r*1.8+10} textAnchor="middle"
+        fontSize={9} fontFamily="monospace" fontWeight="600" fill="#3a2e1a">
         DOG
       </text>
     </g>
@@ -1115,15 +1135,18 @@ const PHASE_META = {
 // ─────────────────────────────────────────────────────────────────────────────
 
 const DOG_TYPES = [
-  { id: 'blue', name: 'Bluey', type: 'circle', color: '#4a7ba7', stroke: '#2a5577' },
-  { id: 'peaches', name: 'Peaches', type: 'sprite', color: '#e8a868', stroke: '#c88038' },
+  { id: 'peaches', name: 'Peaches', idleSprite: '/herding/chihuahua.png', runSprite: '/herding/chihuahua_run.png' },
+  { id: 'lucy', name: 'Lucy', idleSprite: '/herding/boxer.png', runSprite: '/herding/boxer_run.png' },
+
+  // Add more dogs here - just specify name, idleSprite, and runSprite paths
+  // Example: { id: 'fluffy', name: 'Fluffy', idleSprite: '/herding/fluffy.png', runSprite: '/herding/fluffy_run.png' },
 ];
 
-// Chihuahua sprite component - uses PNG image
-function ChihuahuaSprite({ frame = 0, facing = 'right' }) {
-  // Alternate between idle (chihuahua.png) and run (chihuahua_run.png)
+// Dog sprite component - uses PNG images (idle and run)
+function DogSprite({ idleSprite, runSprite, frame = 0, facing = 'right' }) {
+  // Alternate between idle and run frames
   const isRunFrame = frame % 2 === 1;
-  const imageSrc = isRunFrame ? "/herding/chihuahua_run.png" : "/herding/chihuahua.png";
+  const imageSrc = isRunFrame ? runSprite : idleSprite;
 
   // Flip horizontally if facing left
   const transform = facing === 'left' ? 'scale(-1, 1) translate(-24, 0)' : '';
@@ -1144,25 +1167,9 @@ function ChihuahuaSprite({ frame = 0, facing = 'right' }) {
 
 // Generic dog renderer for selector (standalone SVG wrapper)
 function DogAvatar({ dogType, size = 24 }) {
-  if (dogType.type === 'sprite') {
-    return (
-      <svg width={size} height={size} viewBox="0 0 24 24">
-        <ChihuahuaSprite />
-      </svg>
-    );
-  }
-  // Default circle rendering
-  const r = size * 0.375; // 9/24 ratio to match original
   return (
-    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
-      <circle
-        cx={size/2}
-        cy={size/2}
-        r={r}
-        fill={dogType.color}
-        stroke={dogType.stroke}
-        strokeWidth={size/12}
-      />
+    <svg width={size} height={size} viewBox="0 0 24 24">
+      <DogSprite idleSprite={dogType.idleSprite} runSprite={dogType.runSprite} frame={0} facing="right" />
     </svg>
   );
 }
@@ -1216,7 +1223,7 @@ function DogSelector({ selectedDogId, onSelect, onClose }) {
                 }}
                 style={{
                   padding: '10px 12px',
-                  border: `2px solid ${isSelected ? dogType.stroke : '#9a8a6a'}`,
+                  border: `2px solid ${isSelected ? '#4a7ba7' : '#9a8a6a'}`,
                   borderRadius: 6,
                   background: isSelected ? '#fff' : '#ddd3b8',
                   cursor: 'pointer',
@@ -1237,7 +1244,7 @@ function DogSelector({ selectedDogId, onSelect, onClose }) {
                   {dogType.name}
                 </span>
                 {isSelected && (
-                  <span style={{ fontSize: 16, color: '#2a5577' }}>✓</span>
+                  <span style={{ fontSize: 16, color: '#4a7ba7' }}>✓</span>
                 )}
               </button>
             );
@@ -1371,10 +1378,10 @@ function snapshotPos(state) {
 export default function App() {
   // ── Preload sprite images ─────────────────────────────────────────────────
   useEffect(() => {
-    // Preload chihuahua sprites to avoid flickering on first animation
+    // Preload all dog and sheep sprites to avoid flickering on first animation
     const preloadImages = [
-      '/herding/chihuahua.png',
-      '/herding/chihuahua_run.png',
+      ...DOG_TYPES.flatMap(dog => [dog.idleSprite, dog.runSprite]),
+      '/herding/sheep.png',
     ];
     preloadImages.forEach(src => {
       const img = new Image();
