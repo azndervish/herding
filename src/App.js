@@ -990,15 +990,8 @@ function SpookRing({ dog }) {
 function HerdEntity({ herd }) {
   const cx=toPx(herd.x), cy=toPx(herd.y), r=toPx(herd.radius);
 
-  // Sheep positions - arranged in a natural cluster within the herd radius
-  const sheepPositions = [
-    {dx:-.6, dy:-.4},  {dx:.5, dy:-.3},  {dx:-.2, dy:.5},
-    {dx:.55, dy:.45}, {dx:0, dy:-.7},   {dx:-.65, dy:.2},
-    {dx:.3, dy:.1},   {dx:-.3, dy:-.6}, {dx:.65, dy:-.55}
-  ];
-
-  // Sheep sprite size - each sheep is ~1" (game inches), scaled to fit nicely in herd
-  const sheepSize = toPx(0.8);
+  // Herd sprite size - sized to cover the herd radius nicely
+  const herdSpriteSize = r * 2; // Sprite covers the diameter
 
   return (
     <g>
@@ -1009,28 +1002,15 @@ function HerdEntity({ herd }) {
       <circle cx={cx} cy={cy} r={r} fill="none" stroke="#5a8040"
         strokeWidth={2} strokeDasharray="4,2.5" opacity={0.6}/>
 
-      {/* Render sheep sprites */}
-      {sheepPositions.map((pos, i) => {
-        // Position sheep within the herd radius
-        const sx = cx + pos.dx * (r - sheepSize/2);
-        const sy = cy + pos.dy * (r - sheepSize/2);
-
-        // Random rotation for variety (seeded by index for consistency)
-        const rotation = (i * 137.5) % 360;
-
-        return (
-          <g key={i} transform={`translate(${sx}, ${sy}) rotate(${rotation})`}>
-            <image
-              href="/herding/sheep.png"
-              x={-sheepSize/2}
-              y={-sheepSize/2}
-              width={sheepSize}
-              height={sheepSize}
-              preserveAspectRatio="xMidYMid meet"
-            />
-          </g>
-        );
-      })}
+      {/* Herd sprite - centered on the herd position */}
+      <image
+        href="/herding/sheep.png"
+        x={cx - herdSpriteSize/2}
+        y={cy - herdSpriteSize/2}
+        width={herdSpriteSize}
+        height={herdSpriteSize}
+        preserveAspectRatio="xMidYMid meet"
+      />
 
       {/* Label */}
       <text x={cx} y={cy+r+15} textAnchor="middle"
@@ -1044,14 +1024,32 @@ function HerdEntity({ herd }) {
 function LooseAnimalEntity({ la }) {
   const cx=toPx(la.x), cy=toPx(la.y), r=toPx(la.radius);
   const rejoining = la.rejoining;
+
+  // Loose sheep sprite size - sized to match the token radius
+  const spriteSize = r * 2.5; // Slightly larger than the collision circle for visibility
+
   return (
     <g opacity={rejoining ? 0.6 : 1}>
-      <circle cx={cx+1} cy={cy+1} r={r} fill="#9a9070" opacity={0.22}/>
-      <circle cx={cx} cy={cy} r={r} fill="#f4f0d8"
+      {/* Shadow */}
+      <ellipse cx={cx+1} cy={cy+1} rx={r*0.8} ry={r*0.5} fill="#9a9070" opacity={0.22}/>
+
+      {/* Collision reference circle - dotted outline */}
+      <circle cx={cx} cy={cy} r={r} fill="none"
         stroke={rejoining ? "#5a8040" : "#b89828"}
         strokeWidth={rejoining ? 2 : 1.5}
-        strokeDasharray="2,1.5"/>
-      <circle cx={cx} cy={cy} r={2.5} fill={rejoining ? "#5a8040" : "#b89828"}/>
+        strokeDasharray="2,1.5" opacity={0.6}/>
+
+      {/* Loose sheep sprite */}
+      <image
+        href="/herding/loose_sheep.png"
+        x={cx - spriteSize/2}
+        y={cy - spriteSize/2}
+        width={spriteSize}
+        height={spriteSize}
+        preserveAspectRatio="xMidYMid meet"
+      />
+
+      {/* Label */}
       <text x={cx} y={cy+r+10} textAnchor="middle"
         fontSize={8} fontFamily="monospace" fill={rejoining ? "#3a5a20" : "#9a8010"}>
         {la.id.replace('loose_','L')}
@@ -1382,6 +1380,7 @@ export default function App() {
     const preloadImages = [
       ...DOG_TYPES.flatMap(dog => [dog.idleSprite, dog.runSprite]),
       '/herding/sheep.png',
+      '/herding/loose_sheep.png',
     ];
     preloadImages.forEach(src => {
       const img = new Image();
