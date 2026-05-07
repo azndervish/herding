@@ -4,7 +4,10 @@
       "Bash(node --experimental-vm-modules appEngine.test.js)",
       "Bash(node --experimental-vm-modules src/appEngine.test.js)",
       "Bash(node appEngine.test.js)",
-      "Bash(node *)"
+      "Bash(node *)",
+      "Bash(npm start *)",
+      "Bash(curl -s http://localhost:3000)",
+      "Bash(grep -v \"Warning\\\\|Use \\\\`node\")"
     ]
   }
 }

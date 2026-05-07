@@ -117,8 +117,11 @@ HERD_CLEARANCE = 10   // target gap between any animal and the dog after move_he
 - For loose animals: allows movement into contact with herd (for rejoining), but blocks contact with dog and other loose animals
 - For herd: blocks contact with all entities (dog and loose animals)
 - Returns `{ x, y, blocked, obstacle }` with final position and collision information
+- **Terrain penetration protection**: If collision resolution would place an entity inside impassable terrain (can happen when starting very close to terrain), `correctTerrainOverlap()` pushes it to the nearest edge outside the terrain
 
 Used by both `phaseDumbAnimals` and `phaseMoveHerd` to ensure consistent collision behavior.
+
+**Escape logic**: In `phaseMoveHerd`, animals are only marked as escaped if their **final position** (after all collision resolution) is actually at the board edge. This ensures terrain can block escape attempts - if an animal would be pushed off-board but terrain stops it first, no escape is counted.
 
 ---
 
@@ -179,6 +182,67 @@ Rendering layer order (bottom to top): terrain → pen → spook ring → dog ra
 
 ---
 
+## Procedural Generation
+
+### `generateProceduralMap(seed?)`
+
+Generates a random map that satisfies all validation rules. Uses a seedable RNG for deterministic generation.
+
+**Algorithm:**
+1. **Place pen**: Random size (6×8, 8×6, or 8×8), random opening side, positioned on right side of board (x ≥ 14) with 8" clearance from board edge for opening
+2. **Place herd**: Random position in left-center area (x: 4.5-14", y: 2.5-21.5"), avoiding dog zone and pen overlap
+3. **Generate terrain**: One type at a time with specific rules per type
+   - **Impassable** (0-3 pieces):
+     - Dimensions: 2-4" for each side (width and height chosen independently)
+     - Placement: 4" ≤ x ≤ 22", 2" ≤ y ≤ 22"
+     - Validation (checked in order):
+       - Must not overlap pen rectangle (rectangle intersection test)
+       - Must not intersect 8"×8" clear zone in front of pen opening (rectangle intersection test)
+       - Must not overlap herd (distance from terrain center must be ≥ terrain radius + herd radius)
+     - 10 placement attempts per piece, then give up
+     - Console logging shows each attempt with rejection reasons
+4. **Validate**: Runs `validateMap()` and retries with incremented seed if invalid
+
+**RNG:** `createSeededRNG(seed)` implements mulberry32 algorithm for deterministic random generation.
+
+**Usage:**
+```js
+const map = generateProceduralMap();        // Random seed (Date.now())
+const map = generateProceduralMap(12345);   // Fixed seed for reproducible maps
+```
+
+---
+
+## Map Validation
+
+Three validation functions enforce map generation rules:
+
+### `validateDogZone(state)`
+- **Rule**: No terrain may overlap the dog deployment zone (x < 2")
+- Returns `{ valid: boolean, errors: string[] }`
+- Checks all terrain rectangles' left edges
+
+### `validatePenOpening(state)`
+- **Rule**: The pen's opening side must be at least 8" from the board edge
+- Returns `{ valid: boolean, errors: string[] }`
+- Calculates distance based on `pen.openSide` ('left', 'right', 'top', 'bottom')
+- Ensures 8" clearance zone in front of pen entrance
+
+### `validateHerdStart(state)`
+- **Rule 1**: Herd must be fully outside dog zone (x > 2" + `HERD_RADIUS`)
+- **Rule 2**: Herd must not overlap pen rectangle
+- **Rule 3**: Herd must be fully inside board (all edges ≥ `HERD_RADIUS` from boundaries)
+- Returns `{ valid: boolean, errors: string[] }`
+
+### `validateMap(state)`
+- Runs all three validation functions
+- Returns combined `{ valid: boolean, errors: string[] }`
+- Use this for comprehensive map validation
+
+**Constant**: `DOG_ZONE_WIDTH = 2` inches
+
+---
+
 ## Scenarios
 
 Scenarios are defined as plain objects and registered in the `SCENARIOS` array:
@@ -194,8 +258,9 @@ Each scenario `state` object follows the full game state shape (minus `rng`, whi
 **Current scenarios:**
 - **Walk Up** — dog starts bottom-left, herd near centre-left, pen (8"×6") on the right with solid walls on top/right/bottom and open on the left side for entry.
 - **Rotten Bridge** — pen in top right corner (opens bottom), two impassable river sections create an 8" gap in the middle for crossing.
-- **Dead Mount** — pen in top right corner (opens bottom), entire right half of the board is labouring terrain. Herd starts 10" from left edge, 2" from bottom.
+- **Dead Mount** — pen in top right corner (opens bottom), entire right half of the board is labouring terrain. Herd starts 10" from left edge, 3" from bottom.
 - **Bog's Edge** — pen near bottom center (opens right), 8" wide murky water (antithetical terrain) runs along right side from x=16 to x=24. Herd starts 10" from left, 8" from top.
+- **Procedural** — generated map using `generateProceduralMap()`. Satisfies all validation rules with random pen placement, herd position, and 0-2 terrain pieces.
 
 ### Terrain
 

@@ -182,6 +182,66 @@ function _checkStateOob(tag, s) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
+ * Check if a point (x, y) is inside any impassable terrain rectangle.
+ * Returns the terrain object if inside, null otherwise.
+ */
+function isInsideImpassableTerrain(x, y, terrain) {
+  for (const t of terrain) {
+    if (t.type !== 'impassable') continue;
+    const left = t.x - t.w/2;
+    const right = t.x + t.w/2;
+    const top = t.y - t.h/2;
+    const bottom = t.y + t.h/2;
+    if (x > left && x < right && y > top && y < bottom) {
+      return t;
+    }
+  }
+  return null;
+}
+
+/**
+ * If entity position (x, y) with given radius is inside impassable terrain,
+ * return a corrected position outside the terrain (nearest edge).
+ * Returns { x, y, corrected: boolean }.
+ */
+function correctTerrainOverlap(x, y, radius, terrain) {
+  const overlapping = isInsideImpassableTerrain(x, y, terrain);
+  if (!overlapping) {
+    return { x, y, corrected: false };
+  }
+
+  // Find nearest edge and push entity outside
+  const left = overlapping.x - overlapping.w/2;
+  const right = overlapping.x + overlapping.w/2;
+  const top = overlapping.y - overlapping.h/2;
+  const bottom = overlapping.y + overlapping.h/2;
+
+  // Calculate distance to each edge
+  const distToLeft = Math.abs(x - left);
+  const distToRight = Math.abs(x - right);
+  const distToTop = Math.abs(y - top);
+  const distToBottom = Math.abs(y - bottom);
+
+  // Find minimum distance
+  const minDist = Math.min(distToLeft, distToRight, distToTop, distToBottom);
+
+  let newX = x;
+  let newY = y;
+
+  if (minDist === distToLeft) {
+    newX = left - radius - 0.01;
+  } else if (minDist === distToRight) {
+    newX = right + radius + 0.01;
+  } else if (minDist === distToTop) {
+    newY = top - radius - 0.01;
+  } else {
+    newY = bottom + radius + 0.01;
+  }
+
+  return { x: newX, y: newY, corrected: true };
+}
+
+/**
  * Resolves movement from current position to target, handling all collision types.
  * Returns { x, y, blocked, obstacle } where:
  * - x, y: final position after collision resolution
@@ -225,6 +285,16 @@ function resolveMovement(animal, targetX, targetY, state, escapedIds = new Set()
     newX = animal.x + dir.x * stopDist;
     newY = animal.y + dir.y * stopDist;
     obstacle = terrainBlockDist < wallBlockDist ? 'impassable terrain' : 'pen wall';
+
+    // Validate that the stop position is not inside any impassable terrain
+    // This can happen when the entity starts very close to or inside terrain
+    const correction = correctTerrainOverlap(newX, newY, animal.radius, terrain);
+    if (correction.corrected) {
+      console.warn(`[resolveMovement] ${animal.id} stop position (${newX.toFixed(2)}, ${newY.toFixed(2)}) inside terrain - corrected to (${correction.x.toFixed(2)}, ${correction.y.toFixed(2)})`);
+      newX = correction.x;
+      newY = correction.y;
+      obstacle = 'impassable terrain';
+    }
   }
 
   // Check entity collisions (dog, herd, other loose animals)
@@ -492,7 +562,18 @@ function phaseLooseAnimal(state) {
       const angle = rng() * 360;
       const { dx, dy } = angleToOffset(angle, spawnDist);
       const newId = `loose_${s.looseAnimals.length + 1}_t${s.turn}`;
-      const la = { id: newId, type: 'loose', radius: TOKEN_RADIUS, x: s.herd.x + dx, y: s.herd.y + dy };
+      let spawnX = s.herd.x + dx;
+      let spawnY = s.herd.y + dy;
+
+      // Check if spawn position is inside impassable terrain and correct if needed
+      const correction = correctTerrainOverlap(spawnX, spawnY, TOKEN_RADIUS, s.terrain || []);
+      if (correction.corrected) {
+        console.log(`[looseAnimal T${s.turn}] spawn position (${spawnX.toFixed(2)}, ${spawnY.toFixed(2)}) inside terrain — corrected to (${correction.x.toFixed(2)}, ${correction.y.toFixed(2)})`);
+        spawnX = correction.x;
+        spawnY = correction.y;
+      }
+
+      const la = { id: newId, type: 'loose', radius: TOKEN_RADIUS, x: spawnX, y: spawnY };
       console.log(`[looseAnimal T${s.turn}] spawned ${newId} — ${spawnDist}" @ ${angle.toFixed(0)}° → ${_pos(la)}`);
       _checkOob(`looseAnimal:spawn | ${newId}`, la, s.boardSize);
       s.looseAnimals.push(la);
@@ -556,25 +637,29 @@ function phaseMoveHerd(state) {
       console.log(`[moveHerd T${s.turn}] ${animal.id}: dist=${d.toFixed(2)}", pushing ${needed.toFixed(2)}"${inLabouring ? ' (labouring)' : ''} → (${targetX.toFixed(2)},${targetY.toFixed(2)})`);
     }
 
-    const wouldEscape = targetX < animal.radius || targetY < animal.radius ||
-                        targetX > boardSize - animal.radius || targetY > boardSize - animal.radius;
+    const wouldEscapeTarget = targetX < animal.radius || targetY < animal.radius ||
+                              targetX > boardSize - animal.radius || targetY > boardSize - animal.radius;
 
     let clampedTarget = { x: targetX, y: targetY };
-    if (wouldEscape) {
-      // Clamp to board edges but still check for pen walls
+    if (wouldEscapeTarget) {
+      // Clamp to board edges but still check for pen walls/terrain
       clampedTarget.x = Math.max(animal.radius, Math.min(boardSize - animal.radius, targetX));
       clampedTarget.y = Math.max(animal.radius, Math.min(boardSize - animal.radius, targetY));
       console.warn(`[moveHerd T${s.turn}] ${animal.id} would escape at (${targetX.toFixed(2)},${targetY.toFixed(2)}) — clamping to (${clampedTarget.x.toFixed(2)},${clampedTarget.y.toFixed(2)})`);
     }
 
-    // Always run collision detection (including pen walls) even after clamping
+    // Always run collision detection (including pen walls/terrain) even after clamping
     const result = resolveMovement(animal, clampedTarget.x, clampedTarget.y, s, escapedIds);
     let newX = result.x;
     let newY = result.y;
     let blocked = result.blocked;
 
-    // If movement was clamped due to board edge, count it as an escape
-    if (wouldEscape) {
+    // Check if FINAL position (after collision resolution) is at board edge
+    const finalAtEdge = Math.abs(newX - animal.radius) < 0.01 || Math.abs(newX - (boardSize - animal.radius)) < 0.01 ||
+                        Math.abs(newY - animal.radius) < 0.01 || Math.abs(newY - (boardSize - animal.radius)) < 0.01;
+
+    // Only count as escaped if final position is actually at the board edge
+    if (wouldEscapeTarget && finalAtEdge) {
       if (animal.type === 'herd') {
         s.escapedCount = (s.escapedCount || 0) + 1;
         events.push(`Move Herd: Herd hit the board edge! +1 escape (${s.escapedCount} total).`);
@@ -706,6 +791,139 @@ function processTurn(state, action, targetPhase) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// MAP VALIDATION
+// ─────────────────────────────────────────────────────────────────────────────
+
+const DOG_ZONE_WIDTH = 2; // inches from left edge
+
+/**
+ * Validates that no terrain exists in the dog deployment zone (x <= 2").
+ * Returns { valid: boolean, errors: string[] }
+ */
+function validateDogZone(state) {
+  const errors = [];
+  const { terrain = [] } = state;
+
+  for (const t of terrain) {
+    const left = t.x - t.w/2;
+    const right = t.x + t.w/2;
+
+    // Check if terrain overlaps with dog zone (x < 2")
+    if (left < DOG_ZONE_WIDTH) {
+      errors.push(`Terrain "${t.id}" at x=${t.x.toFixed(1)}" overlaps dog zone (x <= ${DOG_ZONE_WIDTH}")`);
+    }
+  }
+
+  return { valid: errors.length === 0, errors };
+}
+
+/**
+ * Validates that the pen's opening side is at least 8" from the board edge.
+ * Returns { valid: boolean, errors: string[] }
+ */
+function validatePenOpening(state) {
+  const errors = [];
+  const { pen, boardSize } = state;
+  const MIN_CLEARANCE = 8;
+
+  const left = pen.x - pen.w/2;
+  const right = pen.x + pen.w/2;
+  const top = pen.y - pen.h/2;
+  const bottom = pen.y + pen.h/2;
+
+  let edgeDist = 0;
+  let edgeName = '';
+
+  switch (pen.openSide) {
+    case 'left':
+      edgeDist = left;
+      edgeName = 'left';
+      break;
+    case 'right':
+      edgeDist = boardSize - right;
+      edgeName = 'right';
+      break;
+    case 'top':
+      edgeDist = top;
+      edgeName = 'top';
+      break;
+    case 'bottom':
+      edgeDist = boardSize - bottom;
+      edgeName = 'bottom';
+      break;
+    default:
+      errors.push(`Pen has invalid openSide: "${pen.openSide}"`);
+      return { valid: false, errors };
+  }
+
+  if (edgeDist < MIN_CLEARANCE) {
+    errors.push(`Pen opening (${edgeName}) is ${edgeDist.toFixed(1)}" from board edge (minimum ${MIN_CLEARANCE}")`);
+  }
+
+  return { valid: errors.length === 0, errors };
+}
+
+/**
+ * Validates that the herd starts:
+ * - Outside the dog zone (x > 2" + herd radius)
+ * - Outside the pen rectangle
+ * - Fully inside the game board
+ * Returns { valid: boolean, errors: string[] }
+ */
+function validateHerdStart(state) {
+  const errors = [];
+  const { herd, pen, boardSize } = state;
+
+  // Rule 1: Herd must be outside dog zone
+  const dogZoneRight = DOG_ZONE_WIDTH + herd.radius;
+  if (herd.x <= dogZoneRight) {
+    errors.push(`Herd at x=${herd.x.toFixed(1)}" overlaps dog zone (must be > ${dogZoneRight.toFixed(1)}")`);
+  }
+
+  // Rule 2: Herd must be outside pen
+  if (circleRectContact(herd, pen)) {
+    errors.push(`Herd at (${herd.x.toFixed(1)}, ${herd.y.toFixed(1)}) overlaps pen`);
+  }
+
+  // Rule 3: Herd must be fully inside board
+  if (herd.x - herd.radius < 0) {
+    errors.push(`Herd extends past left edge (x=${herd.x.toFixed(1)}", radius=${herd.radius})`);
+  }
+  if (herd.x + herd.radius > boardSize) {
+    errors.push(`Herd extends past right edge (x=${herd.x.toFixed(1)}", radius=${herd.radius})`);
+  }
+  if (herd.y - herd.radius < 0) {
+    errors.push(`Herd extends past top edge (y=${herd.y.toFixed(1)}", radius=${herd.radius})`);
+  }
+  if (herd.y + herd.radius > boardSize) {
+    errors.push(`Herd extends past bottom edge (y=${herd.y.toFixed(1)}", radius=${herd.radius})`);
+  }
+
+  return { valid: errors.length === 0, errors };
+}
+
+/**
+ * Runs all map validation rules.
+ * Returns { valid: boolean, errors: string[] }
+ */
+function validateMap(state) {
+  const dogZone = validateDogZone(state);
+  const penOpening = validatePenOpening(state);
+  const herdStart = validateHerdStart(state);
+
+  const allErrors = [
+    ...dogZone.errors,
+    ...penOpening.errors,
+    ...herdStart.errors,
+  ];
+
+  return {
+    valid: allErrors.length === 0,
+    errors: allErrors,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // SCENARIOS
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -743,7 +961,7 @@ const ROTTEN_BRIDGE = {
 const DEAD_MOUNT = {
   boardSize: 24,
   dog:  { id: 'dog',  type: 'dog',  x: 1,  y: 12, radius: TOKEN_RADIUS, facing: 'right' },
-  herd: { id: 'herd', type: 'herd', x: 10, y: 22, radius: HERD_RADIUS  }, // 10" from left (24-10=14" from right), 2" from bottom (24-2=22)
+  herd: { id: 'herd', type: 'herd', x: 10, y: 21, radius: HERD_RADIUS  }, // 10" from left (24-10=14" from right), 3" from bottom (24-3=21)
   pen:  { id: 'pen',  type: 'pen',  x: 20, y: 4, w: 8, h: 8, openSide: 'bottom' }, // Top right corner: center at (20,4), opens bottom
   looseAnimals: [],
   escapedCount: 0,
@@ -772,11 +990,271 @@ const BOGS_EDGE = {
   rng: Math.random,
 };
 
+// ─────────────────────────────────────────────────────────────────────────────
+// PROCEDURAL GENERATION
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Simple seedable RNG (mulberry32)
+ */
+function createSeededRNG(seed) {
+  let state = seed;
+  return function() {
+    state |= 0;
+    state = state + 0x6D2B79F5 | 0;
+    let t = Math.imul(state ^ state >>> 15, 1 | state);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+
+/**
+ * Generates a procedurally generated map that satisfies validation rules.
+ * @param {number} seed - Random seed for deterministic generation
+ * @returns {object} Valid game state
+ */
+function generateProceduralMap(seed = Date.now()) {
+  const rng = createSeededRNG(seed);
+  const boardSize = 24;
+
+  // Helper to generate random value in range
+  const randRange = (min, max) => min + rng() * (max - min);
+
+  // Step 1: Place pen (right side of board, respecting 8" opening clearance)
+  const penSizes = [
+    { w: 8, h: 6 },
+    { w: 8, h: 8 },
+    { w: 6, h: 8 },
+  ];
+  const penSize = penSizes[Math.floor(rng() * penSizes.length)];
+  const openSides = ['left', 'right', 'top', 'bottom'];
+  const openSide = openSides[Math.floor(rng() * openSides.length)];
+
+  // Calculate valid pen placement bounds (must keep opening 8" from edge)
+  let penXMin = penSize.w / 2;
+  let penXMax = boardSize - penSize.w / 2;
+  let penYMin = penSize.h / 2;
+  let penYMax = boardSize - penSize.h / 2;
+
+  // Constrain based on opening side (need 8" clearance)
+  const MIN_OPENING_CLEARANCE = 8;
+  if (openSide === 'left') {
+    penXMin = Math.max(penXMin, MIN_OPENING_CLEARANCE + penSize.w / 2);
+  } else if (openSide === 'right') {
+    penXMax = Math.min(penXMax, boardSize - MIN_OPENING_CLEARANCE - penSize.w / 2);
+  } else if (openSide === 'top') {
+    penYMin = Math.max(penYMin, MIN_OPENING_CLEARANCE + penSize.h / 2);
+  } else if (openSide === 'bottom') {
+    penYMax = Math.min(penYMax, boardSize - MIN_OPENING_CLEARANCE - penSize.h / 2);
+  }
+
+  // Prefer pen on right side for classic gameplay
+  const penX = randRange(Math.max(penXMin, 14), penXMax);
+  const penY = randRange(penYMin, penYMax);
+
+  const pen = {
+    id: 'pen',
+    type: 'pen',
+    x: penX,
+    y: penY,
+    w: penSize.w,
+    h: penSize.h,
+    openSide: openSide,
+  };
+
+  // Step 2: Place herd (left-center area, avoiding dog zone and pen)
+  let herdX, herdY;
+  let attempts = 0;
+  do {
+    herdX = randRange(DOG_ZONE_WIDTH + HERD_RADIUS + 1, 14);
+    herdY = randRange(HERD_RADIUS, boardSize - HERD_RADIUS);
+    attempts++;
+  } while (
+    circleRectContact({ x: herdX, y: herdY, radius: HERD_RADIUS }, pen) &&
+    attempts < 100
+  );
+
+  const herd = {
+    id: 'herd',
+    type: 'herd',
+    x: herdX,
+    y: herdY,
+    radius: HERD_RADIUS,
+  };
+
+  // Step 3: Generate terrain pieces one type at a time
+
+  /**
+   * Helper: Check if terrain piece intersects with 8"×8" clear zone in front of pen opening
+   */
+  const intersectsPenClearZone = (tx, ty, tw, th) => {
+    // Define 8"×8" clear zone in front of pen opening
+    let clearZoneX, clearZoneY;
+    const CLEAR_ZONE_SIZE = 8;
+
+    if (openSide === 'left') {
+      // Clear zone extends 8" to the left of pen opening
+      clearZoneX = pen.x - pen.w/2 - CLEAR_ZONE_SIZE/2;
+      clearZoneY = pen.y;
+    } else if (openSide === 'right') {
+      // Clear zone extends 8" to the right of pen opening
+      clearZoneX = pen.x + pen.w/2 + CLEAR_ZONE_SIZE/2;
+      clearZoneY = pen.y;
+    } else if (openSide === 'top') {
+      // Clear zone extends 8" above pen opening
+      clearZoneX = pen.x;
+      clearZoneY = pen.y - pen.h/2 - CLEAR_ZONE_SIZE/2;
+    } else if (openSide === 'bottom') {
+      // Clear zone extends 8" below pen opening
+      clearZoneX = pen.x;
+      clearZoneY = pen.y + pen.h/2 + CLEAR_ZONE_SIZE/2;
+    }
+
+    const clearZone = {
+      x: clearZoneX,
+      y: clearZoneY,
+      w: CLEAR_ZONE_SIZE,
+      h: CLEAR_ZONE_SIZE,
+    };
+
+    // Check if terrain rectangle intersects with clear zone rectangle
+    const terrainLeft = tx - tw/2;
+    const terrainRight = tx + tw/2;
+    const terrainTop = ty - th/2;
+    const terrainBottom = ty + th/2;
+
+    const clearLeft = clearZone.x - clearZone.w/2;
+    const clearRight = clearZone.x + clearZone.w/2;
+    const clearTop = clearZone.y - clearZone.h/2;
+    const clearBottom = clearZone.y + clearZone.h/2;
+
+    // Rectangles intersect if they overlap on both axes
+    const xOverlap = terrainLeft < clearRight && terrainRight > clearLeft;
+    const yOverlap = terrainTop < clearBottom && terrainBottom > clearTop;
+
+    return xOverlap && yOverlap;
+  };
+
+  const terrain = [];
+
+  // Generate impassable terrain (0-3 pieces)
+  const numImpassable = Math.floor(rng() * 4); // 0, 1, 2, or 3
+  console.log(`[generateProceduralMap seed=${seed}] Attempting to place ${numImpassable} impassable terrain pieces`);
+
+  for (let i = 0; i < numImpassable; i++) {
+    // Dimensions: 2" to 4" for each side
+    const w = Math.floor(randRange(2, 5));
+    const h = Math.floor(randRange(2, 5));
+    console.log(`  [impassable_${i}] Dimensions: ${w}×${h}"`);
+
+    let tx, ty;
+    let placed = false;
+    const MAX_ATTEMPTS = 10;
+
+    for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+      // Place randomly: 4" <= x <= 22", 2" <= y <= 22"
+      // Need to constrain by terrain dimensions to stay on board
+      const xMin = Math.max(4, w/2);
+      const xMax = Math.min(22, boardSize - w/2);
+      const yMin = Math.max(2, h/2);
+      const yMax = Math.min(22, boardSize - h/2);
+
+      tx = randRange(xMin, xMax);
+      ty = randRange(yMin, yMax);
+
+      console.log(`    Attempt ${attempt + 1}: (${tx.toFixed(1)}", ${ty.toFixed(1)}")`);
+
+      // Check if intersects with pen rectangle
+      const terrainLeft = tx - w/2;
+      const terrainRight = tx + w/2;
+      const terrainTop = ty - h/2;
+      const terrainBottom = ty + h/2;
+
+      const penLeft = pen.x - pen.w/2;
+      const penRight = pen.x + pen.w/2;
+      const penTop = pen.y - pen.h/2;
+      const penBottom = pen.y + pen.h/2;
+
+      const xOverlapPen = terrainLeft < penRight && terrainRight > penLeft;
+      const yOverlapPen = terrainTop < penBottom && terrainBottom > penTop;
+      const intersectsPen = xOverlapPen && yOverlapPen;
+
+      if (intersectsPen) {
+        console.log(`      ✗ Overlaps pen`);
+        continue;
+      }
+
+      // Check if intersects with 8"×8" clear zone in front of pen
+      const blocksClearZone = intersectsPenClearZone(tx, ty, w, h);
+      if (blocksClearZone) {
+        console.log(`      ✗ Blocks 8"×8" clear zone in front of pen`);
+        continue;
+      }
+
+      // Check if overlaps herd
+      const terrainRadius = Math.sqrt(w*w + h*h) / 2;
+      const distToHerd = dist({ x: tx, y: ty }, herd);
+      const overlapsHerd = distToHerd < (terrainRadius + HERD_RADIUS);
+      if (overlapsHerd) {
+        console.log(`      ✗ Overlaps herd (distance: ${distToHerd.toFixed(1)}", needs: ${(terrainRadius + HERD_RADIUS).toFixed(1)}")`);
+        continue;
+      }
+
+      // Valid placement
+      console.log(`      ✓ Valid placement`);
+      placed = true;
+      break;
+    }
+
+    if (placed) {
+      terrain.push({
+        id: `impassable_${i}`,
+        type: 'impassable',
+        x: tx,
+        y: ty,
+        w,
+        h,
+      });
+      console.log(`  [impassable_${i}] Placed at (${tx.toFixed(1)}", ${ty.toFixed(1)}")`);
+    } else {
+      console.log(`  [impassable_${i}] Failed to place after ${MAX_ATTEMPTS} attempts`);
+    }
+  }
+
+  // Build final state
+  const state = {
+    boardSize,
+    dog: { id: 'dog', type: 'dog', x: 1, y: 12, radius: TOKEN_RADIUS, facing: 'right' },
+    herd,
+    pen,
+    looseAnimals: [],
+    escapedCount: 0,
+    events: [],
+    turn: 1,
+    phase: 'deployment',
+    terrain,
+    rng: Math.random,
+  };
+
+  // Validate the generated map
+  const validation = validateMap(state);
+  if (!validation.valid) {
+    console.warn('[generateProceduralMap] Generated invalid map:', validation.errors);
+    // Retry with different seed
+    return generateProceduralMap(seed + 1);
+  }
+
+  return state;
+}
+
+const PROCEDURAL = generateProceduralMap();
+
 const SCENARIOS = [
   { id: 'walk_up', name: 'Walk Up', state: WALK_UP },
   { id: 'rotten_bridge', name: 'Rotten Bridge', state: ROTTEN_BRIDGE },
   { id: 'dead_mount', name: 'Dead Mount', state: DEAD_MOUNT },
   { id: 'bogs_edge', name: "Bog's Edge", state: BOGS_EDGE },
+  { id: 'procedural', name: 'Procedural', state: PROCEDURAL },
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
