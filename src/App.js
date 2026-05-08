@@ -1137,8 +1137,8 @@ function generateProceduralMap(seed = Date.now()) {
 
   const terrain = [];
 
-  // Generate impassable terrain (0-3 pieces)
-  const numImpassable = Math.floor(rng() * 4); // 0, 1, 2, or 3
+  // Generate impassable terrain (3 pieces)
+  const numImpassable = 3; //Math.floor(rng() * 4); // 0, 1, 2, or 3
   console.log(`[generateProceduralMap seed=${seed}] Attempting to place ${numImpassable} impassable terrain pieces`);
 
   for (let i = 0; i < numImpassable; i++) {
@@ -1613,6 +1613,8 @@ const PHASE_META = {
 const DOG_TYPES = [
   { id: 'peaches', name: 'Peaches', idleSprite: '/herding/chihuahua.png', runSprite: '/herding/chihuahua_run.png' },
   { id: 'lucy', name: 'Lucy', idleSprite: '/herding/boxer.png', runSprite: '/herding/boxer_run.png' },
+  { id: 'dean', name: 'Dean', idleSprite: '/herding/jackrussell.png', runSprite: '/herding/jackrussell_run.png' },
+  { id: 'rosy', name: 'Rosy', idleSprite: '/herding/beagle.png', runSprite: '/herding/beagle_run.png' },
 
   // Add more dogs here - just specify name, idleSprite, and runSprite paths
   // Example: { id: 'fluffy', name: 'Fluffy', idleSprite: '/herding/fluffy.png', runSprite: '/herding/fluffy_run.png' },

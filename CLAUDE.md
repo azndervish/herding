@@ -192,7 +192,7 @@ Generates a random map that satisfies all validation rules. Uses a seedable RNG 
 1. **Place pen**: Random size (6×8, 8×6, or 8×8), random opening side, positioned on right side of board (x ≥ 14) with 8" clearance from board edge for opening
 2. **Place herd**: Random position in left-center area (x: 4.5-14", y: 2.5-21.5"), avoiding dog zone and pen overlap
 3. **Generate terrain**: One type at a time with specific rules per type
-   - **Impassable** (0-3 pieces):
+   - **Impassable** (3 pieces):
      - Dimensions: 2-4" for each side (width and height chosen independently)
      - Placement: 4" ≤ x ≤ 22", 2" ≤ y ≤ 22"
      - Validation (checked in order):
