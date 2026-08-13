@@ -956,7 +956,7 @@ describe('Terrain collision in phaseDumbAnimals', () => {
 
     // Herd should move toward wall but stop before hitting
     assert.ok(next.herd.x > 4, 'herd should move east');
-    assert.ok(next.herd.x < 8 - HERD_RADIUS, 'herd should stop before terrain wall');
+    assert.ok(next.herd.x < 8, 'herd center should stop before terrain');
     assert.ok(next.events.some(e => e.includes('impassable terrain')), 'should log terrain collision');
   });
 
@@ -1005,7 +1005,7 @@ describe('Terrain collision in phaseComeBy', () => {
     const next = phaseComeBy(s, action);
 
     assert.ok(next.dog.x > 6, 'dog should move east');
-    assert.ok(next.dog.x < 9 - TOKEN_RADIUS, 'dog should stop before terrain');
+    assert.ok(next.dog.x < 9, 'dog center should stop before terrain');
     assert.ok(next.events.some(e => e.includes('impassable terrain')), 'should log terrain collision');
   });
 
@@ -1022,6 +1022,34 @@ describe('Terrain collision in phaseComeBy', () => {
 
     assert.ok(Math.abs(next.dog.x - 10) < 0.1, 'dog should reach target');
     assert.ok(!next.events.some(e => e.includes('terrain')), 'should not mention terrain');
+  });
+
+  it('allows radius overlap at a terrain corner when the center path is clear', () => {
+    const terrain = [{ id: 'water', type: 'impassable', x: 10, y: 10, w: 2, h: 2 }];
+    const s = makeState({
+      phase: 'come_by',
+      dog: { id: 'dog', type: 'dog', x: 6, y: 8.5, radius: TOKEN_RADIUS },
+      herd: { id: 'herd', type: 'herd', x: 20, y: 20, radius: HERD_RADIUS },
+      terrain,
+    });
+
+    const next = phaseComeBy(s, { type: 'move_dog', x: 12, y: 8.5 });
+
+    assert.equal(next.dog.x, 12);
+    assert.equal(next.dog.y, 8.5);
+  });
+
+  it('blocks a pen fence crossing that falls between samples', () => {
+    const s = makeState({
+      phase: 'come_by',
+      dog: { id: 'dog', type: 'dog', x: 6, y: 12, radius: TOKEN_RADIUS },
+      pen: { id: 'pen', type: 'pen', x: 10, y: 12, w: 2, h: 4, openSide: 'left' },
+    });
+
+    const next = phaseComeBy(s, { type: 'move_dog', x: 12, y: 12 });
+
+    assert.ok(next.dog.x < 11, 'dog center should remain before the right fence');
+    assert.ok(next.events.some(e => e.includes('pen wall')));
   });
 
   it('dog prefers closer obstacle (terrain over pen wall)', () => {
@@ -1054,7 +1082,7 @@ describe('Terrain collision in phaseMoveHerd', () => {
 
     // Dog is 4" from herd, needs 10" clearance → herd pushed 6" east, hits terrain at x=10
     assert.ok(next.herd.x > 6, 'herd should be pushed east');
-    assert.ok(next.herd.x <= 10 - HERD_RADIUS, 'herd should stop before or at terrain wall');
+    assert.ok(next.herd.x < 10, 'herd center should stop before terrain');
     assert.ok(next.events.some(e => e.includes('impassable terrain')), 'should log terrain collision');
   });
 
@@ -1071,7 +1099,7 @@ describe('Terrain collision in phaseMoveHerd', () => {
     const next = phaseMoveHerd(s);
 
     assert.ok(next.looseAnimals[0].x > 13, 'loose animal should be pushed east');
-    assert.ok(next.looseAnimals[0].x < 15 - TOKEN_RADIUS, 'loose animal should stop before terrain');
+    assert.ok(next.looseAnimals[0].x < 15, 'loose animal center should stop before terrain');
   });
 });
 

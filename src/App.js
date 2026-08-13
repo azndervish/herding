@@ -109,6 +109,28 @@ function circleSegmentCollision(circle, x1, y1, x2, y2) {
   return distToSegment(circle.x, circle.y, x1, y1, x2, y2) <= circle.radius;
 }
 
+function segmentsIntersect(a, b, x1, y1, x2, y2) {
+  const cross = (p, q, r) =>
+    (q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x);
+  const onSegment = (p, q, r) =>
+    q.x >= Math.min(p.x, r.x) - 1e-9 && q.x <= Math.max(p.x, r.x) + 1e-9 &&
+    q.y >= Math.min(p.y, r.y) - 1e-9 && q.y <= Math.max(p.y, r.y) + 1e-9;
+  const c = { x: x1, y: y1 };
+  const d = { x: x2, y: y2 };
+  const o1 = cross(a, b, c);
+  const o2 = cross(a, b, d);
+  const o3 = cross(c, d, a);
+  const o4 = cross(c, d, b);
+
+  if (((o1 > 0 && o2 < 0) || (o1 < 0 && o2 > 0)) &&
+      ((o3 > 0 && o4 < 0) || (o3 < 0 && o4 > 0))) return true;
+  if (Math.abs(o1) <= 1e-9 && onSegment(a, c, b)) return true;
+  if (Math.abs(o2) <= 1e-9 && onSegment(a, d, b)) return true;
+  if (Math.abs(o3) <= 1e-9 && onSegment(c, a, d)) return true;
+  if (Math.abs(o4) <= 1e-9 && onSegment(c, b, d)) return true;
+  return false;
+}
+
 function rollDie(faces, rng) { return Math.floor(rng() * faces) + 1; }
 
 function angleToOffset(angleDeg, inches) {
@@ -192,7 +214,7 @@ function isInsideImpassableTerrain(x, y, terrain) {
     const right = t.x + t.w/2;
     const top = t.y - t.h/2;
     const bottom = t.y + t.h/2;
-    if (x > left && x < right && y > top && y < bottom) {
+    if (x >= left && x <= right && y >= top && y <= bottom) {
       return t;
     }
   }
@@ -250,75 +272,37 @@ function correctTerrainOverlap(x, y, radius, terrain) {
  * @param {boolean} checkEntityCollisions - if false, only check walls/terrain (for dumb_animals phase)
  */
 function resolveMovement(animal, targetX, targetY, state, escapedIds = new Set(), checkEntityCollisions = true) {
-  const { boardSize, pen, terrain = [], dog, herd, looseAnimals } = state;
-  let newX = targetX;
-  let newY = targetY;
-  let blocked = false;
-  let obstacle = null;
-
-  // Check pen wall collisions along the movement path
+  const { pen, terrain = [], dog, herd, looseAnimals } = state;
   const walls = getPenWalls(pen);
-  let wallBlockDist = Infinity;
-  for (const wall of walls) {
-    const t = raySegmentIntersect(animal, { x: newX, y: newY }, wall[0], wall[1], wall[2], wall[3], animal.radius);
-    if (t !== null && t < wallBlockDist) {
-      wallBlockDist = t;
+  const others = !checkEntityCollisions ? [] : animal.type === 'loose'
+    ? [dog, ...looseAnimals].filter(e => e.id !== animal.id && !escapedIds.has(e.id))
+    : [dog, herd, ...looseAnimals].filter(e => e.id !== animal.id && !escapedIds.has(e.id));
+  let lastValid = { x: animal.x, y: animal.y };
+
+  // Ten equal steps, checked from the origin toward the requested destination.
+  // Area terrain uses the token center only; fences use center-path crossing.
+  for (let i = 1; i <= 10; i++) {
+    const t = i / 10;
+    const candidate = {
+      x: animal.x + (targetX - animal.x) * t,
+      y: animal.y + (targetY - animal.y) * t,
+      radius: animal.radius,
+    };
+
+    if (isInsideImpassableTerrain(candidate.x, candidate.y, terrain)) {
+      return { ...lastValid, blocked: false, obstacle: 'impassable terrain' };
     }
+    if (walls.some(wall => segmentsIntersect(lastValid, candidate, wall[0], wall[1], wall[2], wall[3]))) {
+      return { ...lastValid, blocked: false, obstacle: 'pen wall' };
+    }
+    const hitEntity = others.find(other => entitiesContact(candidate, other));
+    if (hitEntity) {
+      return { ...lastValid, blocked: true, obstacle: hitEntity.id };
+    }
+    lastValid = { x: candidate.x, y: candidate.y };
   }
 
-  // Check terrain collision along the path
-  const terrainEdges = getTerrainEdges(terrain);
-  let terrainBlockDist = Infinity;
-  for (const edge of terrainEdges) {
-    const t = raySegmentIntersect(animal, { x: newX, y: newY }, edge[0], edge[1], edge[2], edge[3], animal.radius);
-    if (t !== null && t < terrainBlockDist) {
-      terrainBlockDist = t;
-    }
-  }
-
-  const blockDist = Math.min(wallBlockDist, terrainBlockDist);
-
-  if (blockDist < Infinity) {
-    // Stop just before hitting the obstacle
-    const dir = unitVector(animal, { x: newX, y: newY });
-    const stopDist = Math.max(0, blockDist - 0.01);
-    newX = animal.x + dir.x * stopDist;
-    newY = animal.y + dir.y * stopDist;
-    obstacle = terrainBlockDist < wallBlockDist ? 'impassable terrain' : 'pen wall';
-
-    // Validate that the stop position is not inside any impassable terrain
-    // This can happen when the entity starts very close to or inside terrain
-    const correction = correctTerrainOverlap(newX, newY, animal.radius, terrain);
-    if (correction.corrected) {
-      console.warn(`[resolveMovement] ${animal.id} stop position (${newX.toFixed(2)}, ${newY.toFixed(2)}) inside terrain - corrected to (${correction.x.toFixed(2)}, ${correction.y.toFixed(2)})`);
-      newX = correction.x;
-      newY = correction.y;
-      obstacle = 'impassable terrain';
-    }
-  }
-
-  // Check entity collisions (dog, herd, other loose animals)
-  if (checkEntityCollisions) {
-    // Loose animals can move into contact with herd (for rejoining), but not other entities
-    const others = animal.type === 'loose'
-      ? [dog, ...looseAnimals].filter(e => e.id !== animal.id && !escapedIds.has(e.id))
-      : [dog, herd, ...looseAnimals].filter(e => e.id !== animal.id && !escapedIds.has(e.id));
-
-    for (const other of others) {
-      const testPos = { x: newX, y: newY, radius: animal.radius };
-      if (entitiesContact(testPos, other)) {
-        const dir = unitVector(animal, { x: newX, y: newY });
-        const stopDist = Math.max(0, dist(animal, other) - animal.radius - other.radius - 0.01);
-        newX = animal.x + dir.x * stopDist;
-        newY = animal.y + dir.y * stopDist;
-        obstacle = other.id;
-        blocked = true;
-        break;
-      }
-    }
-  }
-
-  return { x: newX, y: newY, blocked, obstacle };
+  return { ...lastValid, blocked: false, obstacle: null };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -485,54 +469,17 @@ function phaseComeBy(state, action) {
   const distance = dist(s.dog, target);
   console.log(`[comeBy T${s.turn}] target=(${target.x.toFixed(2)},${target.y.toFixed(2)}) dist=${distance.toFixed(2)}"${distance > DOG_MOVE_MAX ? ' ⚠ EXCEEDS MAX' : ''}`);
   if (distance > DOG_MOVE_MAX + 1e-9) throw new Error(`Move exceeds max ${DOG_MOVE_MAX}".`);
-  // Check for pen wall collisions
-  const walls = getPenWalls(s.pen);
-  let wallBlockDist = Infinity;
-  for (const wall of walls) {
-    const t = raySegmentIntersect(s.dog, target, wall[0], wall[1], wall[2], wall[3], s.dog.radius);
-    if (t !== null && t < wallBlockDist) {
-      wallBlockDist = t;
-    }
-  }
-
-  // Check terrain collision along the path
-  const terrainEdges = getTerrainEdges(s.terrain || []);
-  let terrainBlockDist = Infinity;
-  for (const edge of terrainEdges) {
-    const t = raySegmentIntersect(s.dog, target, edge[0], edge[1], edge[2], edge[3], s.dog.radius);
-    if (t !== null && t < terrainBlockDist) {
-      terrainBlockDist = t;
-    }
-  }
-
-  const obstacles = [s.herd, ...s.looseAnimals];
-  let closestBlock = Infinity, blockedEntity = null;
-  for (const obs of obstacles) {
-    const t = rayCircleIntersect(s.dog, target, obs);
-    if (t !== null && t < closestBlock) { closestBlock = t; blockedEntity = obs; }
-  }
-
-  // Use whichever blocker is closest
-  const blockDist = Math.min(wallBlockDist, terrainBlockDist, closestBlock);
-
   // Calculate facing direction based on movement
   const deltaX = target.x - s.dog.x;
   const facing = deltaX < 0 ? 'left' : 'right';
 
-  if (blockDist < Infinity) {
-    const dir = unitVector(s.dog, target);
-    const stopDist = Math.max(0, blockDist - 0.01);
-    s.dog.x += dir.x * stopDist; s.dog.y += dir.y * stopDist;
-
-    let obstacle = 'unknown';
-    if (terrainBlockDist === blockDist) obstacle = 'impassable terrain';
-    else if (wallBlockDist === blockDist) obstacle = 'pen wall';
-    else obstacle = blockedEntity.id;
-
-    console.log(`[comeBy T${s.turn}] dog blocked by ${obstacle} at dist=${blockDist.toFixed(2)}", stopped at ${_pos(s.dog)}`);
-    events.push(`Come-by: Dog blocked by ${obstacle}, stopped at (${s.dog.x.toFixed(1)}, ${s.dog.y.toFixed(1)}).`);
+  const result = resolveMovement(s.dog, target.x, target.y, s);
+  s.dog.x = result.x;
+  s.dog.y = result.y;
+  if (result.obstacle) {
+    console.log(`[comeBy T${s.turn}] dog blocked by ${result.obstacle}, stopped at ${_pos(s.dog)}`);
+    events.push(`Come-by: Dog blocked by ${result.obstacle}, stopped at (${s.dog.x.toFixed(1)}, ${s.dog.y.toFixed(1)}).`);
   } else {
-    s.dog.x = target.x; s.dog.y = target.y;
     console.log(`[comeBy T${s.turn}] dog moved to ${_pos(s.dog)}`);
     events.push(`Come-by: Dog moves to (${s.dog.x.toFixed(1)}, ${s.dog.y.toFixed(1)}).`);
   }
