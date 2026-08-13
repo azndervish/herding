@@ -10,6 +10,7 @@ import {
 // ─────────────────────────────────────────────────────────────────────────────
 
 const BOARD_PX = 480;
+const INCHES_PER_FRAME = 2;
 
 function toPx(inches) { return (inches / 24) * BOARD_PX; }
 

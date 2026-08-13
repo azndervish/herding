@@ -6,7 +6,6 @@ const TOKEN_RADIUS  = 0.75;
 const DOG_MOVE_MAX  = 12;
 const DOG_SPOOK_RANGE = 8;
 const HERD_CLEARANCE  = 10;
-const INCHES_PER_FRAME = 2; // Dog sprite animation: inches traveled per frame change
 
 function dist(a, b) { return Math.sqrt((a.x-b.x)**2 + (a.y-b.y)**2); }
 
