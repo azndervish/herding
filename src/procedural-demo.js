@@ -1,6 +1,6 @@
 // procedural-demo.js — generate and display sample procedural maps
 
-import { generateProceduralMap, validateMap } from './appEngine.js';
+import { generateProceduralMap, validateMap } from './engine.js';
 
 console.log('Generating 5 procedural maps...\n');
 

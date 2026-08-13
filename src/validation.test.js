@@ -7,7 +7,7 @@ import {
   validateDogZone, validatePenOpening, validateHerdStart, validateMap,
   WALK_UP, ROTTEN_BRIDGE, DEAD_MOUNT, BOGS_EDGE,
   dist, generateProceduralMap, createSeededRNG, PROCEDURAL,
-} from './appEngine.js';
+} from './engine.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // validateDogZone tests

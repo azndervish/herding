@@ -1,8 +1,7 @@
 /**
  * appEngine.test.js
  *
- * Unit tests for the game engine inlined in App.jsx.
- * Extracted into appEngine.js (a thin re-export shim) for testability.
+ * Unit tests for the game engine, imported through its compatibility shim.
  *
  * Run:  node --experimental-vm-modules appEngine.test.js
  * Requires Node ≥ 18.
@@ -35,7 +34,6 @@ import {
   rollDie,
   angleToOffset,
   cloneState,
-  getTerrainEdges,
   phaseDumbAnimals,
   phaseComeBy,
   phaseLooseAnimal,
@@ -43,7 +41,7 @@ import {
   processTurn,
   WALK_UP,
   ROTTEN_BRIDGE,
-} from './appEngine.js';
+} from './engine.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Test helpers
@@ -894,50 +892,6 @@ describe('WALK_UP scenario', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 // Terrain
 // ─────────────────────────────────────────────────────────────────────────────
-
-describe('getTerrainEdges', () => {
-  it('returns empty array for empty terrain', () => {
-    const edges = getTerrainEdges([]);
-    assert.equal(edges.length, 0);
-  });
-
-  it('returns 4 edges for one impassable terrain rectangle', () => {
-    const terrain = [{ id: 'water', type: 'impassable', x: 12, y: 12, w: 4, h: 2 }];
-    const edges = getTerrainEdges(terrain);
-    assert.equal(edges.length, 4);
-    // Check edges are line segments [x1, y1, x2, y2]
-    edges.forEach(edge => {
-      assert.equal(edge.length, 4);
-      edge.forEach(coord => assert.equal(typeof coord, 'number'));
-    });
-  });
-
-  it('ignores non-impassable terrain types', () => {
-    const terrain = [
-      { id: 'grass', type: 'passable', x: 12, y: 12, w: 4, h: 2 },
-      { id: 'water', type: 'impassable', x: 6, y: 6, w: 2, h: 2 },
-    ];
-    const edges = getTerrainEdges(terrain);
-    assert.equal(edges.length, 4); // only water produces edges
-  });
-
-  it('returns correct edge coordinates for centered rectangle', () => {
-    // 2x2 rectangle centered at (10, 10) → left=9, right=11, top=9, bottom=11
-    const terrain = [{ id: 'water', type: 'impassable', x: 10, y: 10, w: 2, h: 2 }];
-    const edges = getTerrainEdges(terrain);
-
-    // Should contain top, right, bottom, left edges
-    const topEdge = edges.find(e => e[1] === 9 && e[3] === 9); // y1=9, y2=9
-    const bottomEdge = edges.find(e => e[1] === 11 && e[3] === 11); // y1=11, y2=11
-    const leftEdge = edges.find(e => e[0] === 9 && e[2] === 9); // x1=9, x2=9
-    const rightEdge = edges.find(e => e[0] === 11 && e[2] === 11); // x1=11, x2=11
-
-    assert.ok(topEdge, 'should have top edge');
-    assert.ok(bottomEdge, 'should have bottom edge');
-    assert.ok(leftEdge, 'should have left edge');
-    assert.ok(rightEdge, 'should have right edge');
-  });
-});
 
 describe('Terrain collision in phaseDumbAnimals', () => {
   it('herd stops when hitting impassable terrain', () => {

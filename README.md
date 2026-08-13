@@ -65,13 +65,13 @@ Open [http://localhost:3000](http://localhost:3000) to play.
 
 ```
 src/
-├── App.js              - Complete game: engine + React UI
-├── appEngine.js        - Auto-generated engine export for testing
+├── App.js              - React UI and animation
+├── engine.js           - Game rules, movement, scenarios, and validation
 ├── appEngine.test.js   - Engine unit tests (Node test runner)
-└── index.js           - React entry point
+└── index.js            - React entry point
 ```
 
-**Key Design:** Engine and UI are in the same file but cleanly separated. The engine section (pure JS, no React) can be extracted for testing.
+**Key Design:** The pure JavaScript engine is independent of React and imported by both the UI and tests.
 
 ## 🧪 Testing
 
@@ -106,27 +106,7 @@ All 106 tests pass ✓
 
 ## 🔧 Development
 
-### Regenerating Engine Export
-
-After editing `App.js` engine code, regenerate the test export:
-
-```bash
-cd src
-node --input-type=module -e "
-import { readFileSync, writeFileSync } from 'fs';
-const content = readFileSync('App.js', 'utf8');
-const start   = content.indexOf('// ENGINE (inlined)');
-const engEnd  = content.indexOf('// SCENARIO');
-const scenEnd = content.indexOf('// BOARD SVG');
-const engine  = content.slice(start, engEnd).split('\n')
-  .filter(l => !l.trim().startsWith('// ─') && l.trim() !== '// ENGINE (inlined)')
-  .join('\n');
-const scenario = content.slice(engEnd, scenEnd).split('\n')
-  .filter(l => !l.trim().startsWith('// ─') && l.trim() !== '// SCENARIOS')
-  .join('\n');
-writeFileSync('appEngine.js', \`// appEngine.js — auto-generated from App.js\n\n\${engine}\n\n\${scenario}\n\nexport { /* exports */ };\`);
-"
-```
+Edit game behavior in `src/engine.js`; no generated engine shim is required.
 
 ### Project Structure
 

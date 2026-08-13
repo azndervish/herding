@@ -8,7 +8,7 @@ import {
   TOKEN_RADIUS,
   HERD_RADIUS,
   phaseMoveHerd,
-} from './appEngine.js';
+} from './engine.js';
 
 test('terrain should block escape - animal stopped by terrain before reaching edge', () => {
   // Scenario: loose animal is pushed toward board edge, but terrain blocks it

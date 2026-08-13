@@ -10,7 +10,7 @@ import {
   HERD_RADIUS,
   phaseMoveHerd,
   processTurn,
-} from './appEngine.js';
+} from './engine.js';
 
 test('loose animal starting inside impassable terrain does not move deeper', () => {
   // Recreate scenario from logs: seed=1777946334097

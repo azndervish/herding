@@ -2,7 +2,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { generateProceduralMap, dist } from './appEngine.js';
+import { generateProceduralMap, dist } from './engine.js';
 
 test('impassable terrain: dimensions are 2-4 inches', () => {
   for (let seed = 1; seed <= 20; seed++) {
