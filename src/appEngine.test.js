@@ -58,6 +58,7 @@ function seqRng(...vals) {
 
 /** Minimal valid state using the App.jsx shape (escapedCount may start absent). */
 function makeState(overrides = {}) {
+  const { herd: legacyHerd, herds: overrideHerds, ...rest } = overrides;
   return {
     boardSize: 24,
     turn: 1,
@@ -66,11 +67,11 @@ function makeState(overrides = {}) {
     events: [],
     rng: fixedRng(0.5),
     dog:  { id: 'dog',  type: 'dog',  x: 12, y: 12, radius: TOKEN_RADIUS },
-    herd: { id: 'herd', type: 'herd', x: 12, y: 6,  radius: HERD_RADIUS  },
+    herds: overrideHerds || [legacyHerd || { id: 'herd', type: 'herd', x: 12, y: 6, radius: HERD_RADIUS }],
     pen:  { id: 'pen',  type: 'pen',  x: 22, y: 22, w: 5, h: 5, openSide: 'left' },
     looseAnimals: [],
     terrain: [],
-    ...overrides,
+    ...rest,
   };
 }
 
@@ -165,16 +166,16 @@ describe('cloneState', () => {
     const c = cloneState(s);
     assert.notEqual(c, s);
     assert.notEqual(c.dog, s.dog);
-    assert.notEqual(c.herd, s.herd);
+    assert.notEqual(c.herds[0], s.herds[0]);
     assert.notEqual(c.looseAnimals, s.looseAnimals);
     assert.notEqual(c.events, s.events);
   });
   it('mutations to clone do not affect original', () => {
     const s = makeState();
     const c = cloneState(s);
-    c.dog.x = 99; c.herd.y = 99;
+    c.dog.x = 99; c.herds[0].y = 99;
     assert.equal(s.dog.x, 12);
-    assert.equal(s.herd.y, 6);
+    assert.equal(s.herds[0].y, 6);
   });
 });
 
@@ -190,7 +191,7 @@ describe('phaseDumbAnimals', () => {
   it('moves herd by D6" in random direction', () => {
     // fixedRng(0.9): roll=6, angle≈324° — herd should move
     const s = phaseDumbAnimals(makeState({ rng: fixedRng(0.9) }));
-    const moved = s.herd.x !== 12 || s.herd.y !== 6;
+    const moved = s.herds[0].x !== 12 || s.herds[0].y !== 6;
     assert.ok(moved);
   });
 
@@ -223,8 +224,8 @@ describe('phaseDumbAnimals', () => {
       rng: seqRng(0.9999, 0.75),
     });
     const s = phaseDumbAnimals(state);
-    assert.ok(s.herd.y >= 0, `herd.y should be ≥0, got ${s.herd.y}`);
-    assert.equal(s.herd.y, HERD_RADIUS);
+    assert.ok(s.herds[0].y >= 0, `herd.y should be ≥0, got ${s.herds[0].y}`);
+    assert.equal(s.herds[0].y, HERD_RADIUS);
     assert.equal(s.escapedCount, 1);
     assert.ok(s.events.some(e => e.includes('board edge') && e.includes('Herd')));
   });
@@ -232,26 +233,26 @@ describe('phaseDumbAnimals', () => {
   it('herd clamped to board edge does not go negative', () => {
     // All four edges: north
     const north = makeState({ herd:{id:'herd',type:'herd',x:12,y:1,radius:HERD_RADIUS}, rng:seqRng(0.9999,0.75) });
-    assert.ok(phaseDumbAnimals(north).herd.y >= 0);
+    assert.ok(phaseDumbAnimals(north).herds[0].y >= 0);
     // South
     const south = makeState({ herd:{id:'herd',type:'herd',x:12,y:23,radius:HERD_RADIUS}, rng:seqRng(0.9999,0.25) });
-    assert.ok(phaseDumbAnimals(south).herd.y <= 24);
+    assert.ok(phaseDumbAnimals(south).herds[0].y <= 24);
     // West
     const west = makeState({ herd:{id:'herd',type:'herd',x:1,y:12,radius:HERD_RADIUS}, rng:seqRng(0.9999,0.5) });
-    assert.ok(phaseDumbAnimals(west).herd.x >= 0);
+    assert.ok(phaseDumbAnimals(west).herds[0].x >= 0);
     // East
     const east = makeState({ herd:{id:'herd',type:'herd',x:23,y:12,radius:HERD_RADIUS}, rng:seqRng(0.9999,0) });
-    assert.ok(phaseDumbAnimals(east).herd.x <= 24);
+    assert.ok(phaseDumbAnimals(east).herds[0].x <= 24);
   });
 
   it('removes loose animal that reaches board edge', () => {
-    // la_far is furthest from dog (dog at 12,12), so it moves first
-    // seqRng: la_far gets roll=6 at angle=0° → x = 23+6 = 29 → escaped
+    // Herds move first, followed by loose animals.
+    // seqRng: herd wanders first, then la_far gets roll=6 at angle=0° → escaped
     const state = makeState({
       looseAnimals: [{ id:'la_far', type:'loose', x:23, y:12, radius:TOKEN_RADIUS }],
       rng: seqRng(
-        0.9, 0,    // la_far: roll=6, angle=0° → escapes right
         0.5, 0.5,  // herd: roll=3, angle=180°
+        0.9, 0,    // la_far: roll=6, angle=0° → escapes right
       ),
     });
     const s = phaseDumbAnimals(state);
@@ -281,9 +282,9 @@ describe('phaseDumbAnimals', () => {
 
   it('does not mutate original state', () => {
     const s0 = makeState();
-    const herdXBefore = s0.herd.x;
+    const herdXBefore = s0.herds[0].x;
     phaseDumbAnimals(s0);
-    assert.equal(s0.herd.x, herdXBefore);
+    assert.equal(s0.herds[0].x, herdXBefore);
   });
 });
 
@@ -465,6 +466,76 @@ describe('phaseLooseAnimal', () => {
   });
 });
 
+describe('multiple herds', () => {
+  it('moves herds in array order and normalizes legacy single-herd input', () => {
+    const state = makeState({
+      dog: { id: 'dog', type: 'dog', x: 12, y: 12, radius: TOKEN_RADIUS },
+      herds: [
+        { id: 'north', type: 'herd', x: 12, y: 6, radius: HERD_RADIUS },
+        { id: 'south', type: 'herd', x: 12, y: 18, radius: HERD_RADIUS },
+      ],
+      rng: seqRng(0, 0, 0, 0),
+    });
+
+    const next = phaseDumbAnimals(state);
+    assert.deepEqual(next.herds.map(h => h.id), ['north', 'south']);
+    assert.equal(next.herds[0].x, 13);
+    assert.equal(next.herds[1].x, 13);
+    assert.equal(next.herd, undefined);
+  });
+
+  it('runs independent spook rolls for each herd', () => {
+    const state = makeState({
+      phase: 'loose_animal',
+      dog: { id: 'dog', type: 'dog', x: 12, y: 12, radius: TOKEN_RADIUS },
+      herds: [
+        { id: 'north', type: 'herd', x: 12, y: 6, radius: HERD_RADIUS },
+        { id: 'south', type: 'herd', x: 12, y: 18, radius: HERD_RADIUS },
+      ],
+      rng: seqRng(0.9999, 0, 0, 0),
+    });
+
+    const next = phaseLooseAnimal(state);
+    assert.equal(next.looseAnimals.length, 1);
+    assert.match(next.looseAnimals[0].id, /north/);
+    assert.ok(next.events.some(e => e.includes('south holds')));
+  });
+
+  it('allows a loose animal to rejoin any active herd', () => {
+    const state = makeState({
+      phase: 'dumb_animals',
+      dog: { id: 'dog', type: 'dog', x: 12, y: 12, radius: TOKEN_RADIUS },
+      herds: [
+        { id: 'north', type: 'herd', x: 12, y: 6, radius: HERD_RADIUS },
+        { id: 'south', type: 'herd', x: 12, y: 18, radius: HERD_RADIUS },
+      ],
+      looseAnimals: [{ id: 'loose', type: 'loose', x: 12, y: 15, radius: TOKEN_RADIUS }],
+      rng: fixedRng(0),
+    });
+
+    const next = phaseDumbAnimals(state);
+    assert.equal(next.looseAnimals.length, 0);
+    assert.ok(next.events.some(e => e.includes('rejoined')));
+  });
+
+  it('removes a herd that enters the pen while leaving other herds active', () => {
+    const state = makeState({
+      phase: 'move_herd',
+      dog: { id: 'dog', type: 'dog', x: 2, y: 12, radius: TOKEN_RADIUS },
+      herds: [
+        { id: 'inside', type: 'herd', x: 10, y: 12, radius: HERD_RADIUS },
+        { id: 'outside', type: 'herd', x: 6, y: 6, radius: HERD_RADIUS },
+      ],
+      pen: { id: 'pen', type: 'pen', x: 10, y: 12, w: 8, h: 8, openSide: 'left' },
+    });
+
+    const next = phaseMoveHerd(state);
+    assert.deepEqual(next.herds.map(h => h.id), ['outside']);
+    assert.equal(next.phase, 'dumb_animals');
+    assert.ok(next.events.some(e => e.includes('inside entered the pen')));
+  });
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Phase 4: Move Herd
 // ─────────────────────────────────────────────────────────────────────────────
@@ -491,8 +562,8 @@ describe('phaseMoveHerd', () => {
     });
     const s = phaseMoveHerd(s0);
     if (s.phase !== 'finished') {
-      assert.ok(dist(s.herd, s.dog) >= HERD_CLEARANCE - 0.01,
-        `Expected ≥10", got ${dist(s.herd,s.dog).toFixed(2)}"`);
+      assert.ok(dist(s.herds[0], s.dog) >= HERD_CLEARANCE - 0.01,
+        `Expected ≥10", got ${dist(s.herds[0],s.dog).toFixed(2)}"`);
     }
   });
 
@@ -501,10 +572,10 @@ describe('phaseMoveHerd', () => {
       dog:  { id:'dog',  type:'dog',  x:12, y:12, radius:TOKEN_RADIUS },
       herd: { id:'herd', type:'herd', x:22, y:12, radius:HERD_RADIUS },
     });
-    const hXBefore = s0.herd.x;
+    const hXBefore = s0.herds[0].x;
     const s = phaseMoveHerd(s0);
     if (s.phase !== 'finished') {
-      assert.ok(Math.abs(s.herd.x - hXBefore) < 0.01);
+      assert.ok(Math.abs(s.herds[0].x - hXBefore) < 0.01);
     }
   });
 
@@ -750,8 +821,8 @@ describe('processTurn', () => {
 
     assert.equal(stepped.turn,  full.turn);
     assert.equal(stepped.phase, full.phase);
-    assert.ok(Math.abs(stepped.herd.x - full.herd.x) < 0.01);
-    assert.ok(Math.abs(stepped.herd.y - full.herd.y) < 0.01);
+    assert.ok(Math.abs(stepped.herds[0].x - full.herds[0].x) < 0.01);
+    assert.ok(Math.abs(stepped.herds[0].y - full.herds[0].y) < 0.01);
     assert.ok(Math.abs(stepped.dog.x  - full.dog.x)  < 0.01);
     assert.ok(Math.abs(stepped.dog.y  - full.dog.y)  < 0.01);
   });
@@ -774,8 +845,8 @@ describe('WALK_UP scenario', () => {
   it('has the correct starting positions', () => {
     assert.equal(WALK_UP.dog.x,  1);
     assert.equal(WALK_UP.dog.y,  12);  // Dog starts at default position before deployment
-    assert.equal(WALK_UP.herd.x, 6);
-    assert.equal(WALK_UP.herd.y, 10);
+    assert.equal(WALK_UP.herds[0].x, 6);
+    assert.equal(WALK_UP.herds[0].y, 10);
     assert.equal(WALK_UP.pen.x,  18);
     assert.equal(WALK_UP.pen.y,  10);
   });
@@ -817,7 +888,7 @@ describe('WALK_UP scenario', () => {
 
   it('bootstrap: herd has moved after dumb_animals', () => {
     const s = deployedWalkUp(fixedRng(0.9));
-    const moved = s.herd.x !== WALK_UP.herd.x || s.herd.y !== WALK_UP.herd.y;
+    const moved = s.herds[0].x !== WALK_UP.herds[0].x || s.herds[0].y !== WALK_UP.herds[0].y;
     assert.ok(moved);
   });
 
@@ -861,8 +932,8 @@ describe('WALK_UP scenario', () => {
       s = processTurn(s, null, 'come_by');
       s = processTurn(s, null, 'come_by');
     }
-    assert.ok(s.herd.x >= 0 && s.herd.x <= 24, `herd.x=${s.herd.x}`);
-    assert.ok(s.herd.y >= 0 && s.herd.y <= 24, `herd.y=${s.herd.y}`);
+    assert.ok(s.herds[0].x >= 0 && s.herds[0].x <= 24, `herd.x=${s.herds[0].x}`);
+    assert.ok(s.herds[0].y >= 0 && s.herds[0].y <= 24, `herd.y=${s.herds[0].y}`);
   });
 
   it('game can eventually finish (herd reaches pen over many turns)', () => {
@@ -909,8 +980,8 @@ describe('Terrain collision in phaseDumbAnimals', () => {
     const next = phaseDumbAnimals(s);
 
     // Herd should move toward wall but stop before hitting
-    assert.ok(next.herd.x > 4, 'herd should move east');
-    assert.ok(next.herd.x < 8, 'herd center should stop before terrain');
+    assert.ok(next.herds[0].x > 4, 'herd should move east');
+    assert.ok(next.herds[0].x < 8, 'herd center should stop before terrain');
     assert.ok(next.events.some(e => e.includes('impassable terrain')), 'should log terrain collision');
   });
 
@@ -941,7 +1012,7 @@ describe('Terrain collision in phaseDumbAnimals', () => {
     const next = phaseDumbAnimals(s);
 
     // Should move full distance since terrain is far away
-    assert.ok(Math.abs(next.herd.x - 7) < 0.1, 'herd should reach target position');
+    assert.ok(Math.abs(next.herds[0].x - 7) < 0.1, 'herd should reach target position');
     assert.ok(!next.events.some(e => e.includes('terrain')), 'should not mention terrain');
   });
 });
@@ -1038,9 +1109,9 @@ describe('Terrain collision in phaseMoveHerd', () => {
     const next = phaseMoveHerd(s);
 
     // Dog is 4" from herd, needs 10" clearance → herd pushed 6" east, hits terrain at x=10
-    assert.ok(next.herd.x > 6, 'herd should be pushed east');
-    assert.ok(next.herd.x + HERD_RADIUS <= 10.01,
-      `herd overlaps terrain: right=${(next.herd.x + HERD_RADIUS).toFixed(2)}, terrain=${10}`);
+    assert.ok(next.herds[0].x > 6, 'herd should be pushed east');
+    assert.ok(next.herds[0].x + HERD_RADIUS <= 10.01,
+      `herd overlaps terrain: right=${(next.herds[0].x + HERD_RADIUS).toFixed(2)}, terrain=${10}`);
     assert.ok(next.events.some(e => e.includes('impassable terrain')), 'should log terrain collision');
   });
 
@@ -1071,9 +1142,9 @@ describe('Terrain collision in phaseMoveHerd', () => {
     const next = phaseMoveHerd(s);
     const rightFence = 11;
 
-    assert.ok(next.herd.x > 6, 'herd should be pushed toward the fence');
-    assert.ok(next.herd.x + HERD_RADIUS <= rightFence + 0.01,
-      `herd overlaps fence: right=${(next.herd.x + HERD_RADIUS).toFixed(2)}, fence=${rightFence}`);
+    assert.ok(next.herds[0].x > 6, 'herd should be pushed toward the fence');
+    assert.ok(next.herds[0].x + HERD_RADIUS <= rightFence + 0.01,
+      `herd overlaps fence: right=${(next.herds[0].x + HERD_RADIUS).toFixed(2)}, fence=${rightFence}`);
     assert.ok(next.events.some(e => e.includes('pen wall')));
   });
 });

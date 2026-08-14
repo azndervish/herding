@@ -51,7 +51,7 @@ The engine has no React imports and is used directly by both the UI and tests.
   turn: number,
   phase: 'dumb_animals' | 'come_by' | 'loose_animal' | 'move_herd' | 'finished',
   dog:          { id, type, x, y, radius },
-  herd:         { id, type, x, y, radius },
+  herds:        [{ id, type, x, y, radius }, ...],
   looseAnimals: [{ id, type, x, y, radius }, ...],
   pen:          { id, type, x, y, w, h, openSide },
   escapedCount: number,
@@ -63,10 +63,10 @@ The engine has no React imports and is used directly by both the UI and tests.
 
 ### Turn phases (in order)
 
-1. **`dumb_animals`** — Each animal (herd + loose) moves D6" in a random direction, furthest from dog first. All entities stop at pen walls, impassable terrain, and when contacting the dog or other loose animals. Loose animals CAN move into contact with the herd (for rejoining). Herd is clamped to board edge on contact (counts as escape). Loose animals that touch the board edge are removed (escaped).
+1. **`dumb_animals`** — Each herd moves D6" in array order, followed by loose animals in furthest-from-dog order. All entities stop at pen walls, impassable terrain, and when contacting the dog or other loose animals. Loose animals CAN move into contact with any herd (for rejoining). Herds are clamped to board edges on contact (counts as escape). Loose animals that touch the board edge are removed (escaped).
 2. **`come_by`** — Player moves the dog up to 12". Dog cannot pass through herd, loose animals, pen walls, or impassable terrain. Accepts `null` action (dog holds position).
-3. **`loose_animal`** — If dog is within 8" of herd, roll D8. If roll ≥ distance, a loose animal spawns D6" from herd in a random direction.
-4. **`move_herd`** — Each animal is pushed directly away from the dog until ≥10" gap, furthest first. Animals stop at board edges, pen walls, impassable terrain, or when contacting other entities. **Victory condition:** Game transitions to `finished` phase if the herd's center point (x, y) is inside the pen rectangle.
+3. **`loose_animal`** — For each active herd, if the dog is within 8", roll D8 independently. If roll ≥ distance, a loose animal spawns D6" from that herd in a random direction.
+4. **`move_herd`** — Each herd is pushed independently in array order, followed by loose animals. Animals stop at board edges, pen walls, impassable terrain, or when contacting other entities. A herd is removed immediately when its center enters the pen; the game transitions to `finished` when no active herds remain.
 
 ### `processTurn(state, action, targetPhase?)`
 
@@ -158,7 +158,7 @@ Each stage is 500ms and is skipped if there's no movement. The animation uses `p
 
 **Key state:**
 
-- `displayPos` — `{ dog: {x,y}, herd: {x,y}, looseAnimals: [{id,x,y,radius}] }` — what's actually rendered. Updated at 60fps by the rAF loop during animation.
+- `displayPos` — `{ dog: {x,y}, herds: [{id,x,y,radius}], looseAnimals: [{id,x,y,radius}] }` — what's actually rendered. Updated at 60fps by the rAF loop during animation.
 - `gameState` — the authoritative engine state. Only updated when animation completes. UI chrome (phase badge, events, stats) reads from here, so it stays frozen during playback.
 - `animRef` — plain mutable ref holding animation bookkeeping: `phase` (`'dog' | 'loose' | 'herd' | 'dumb_loose' | 'dumb_herd' | 'idle'`), `startMs`, `from/to` positions for both sequences (`looseFrames[]`, `looseFrames2[]`, etc.), `midState` (after move_herd), `finalState` (after dumb_animals), `raf` handle.
 

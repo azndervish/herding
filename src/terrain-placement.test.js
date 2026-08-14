@@ -141,8 +141,8 @@ test('impassable terrain: does not overlap herd', () => {
 
     impassable.forEach(t => {
       const terrainRadius = Math.sqrt(t.w*t.w + t.h*t.h) / 2;
-      const distToHerd = dist({ x: t.x, y: t.y }, map.herd);
-      const minDistance = terrainRadius + map.herd.radius;
+      const distToHerd = dist({ x: t.x, y: t.y }, map.herds[0]);
+      const minDistance = terrainRadius + map.herds[0].radius;
 
       assert.ok(
         distToHerd >= minDistance,

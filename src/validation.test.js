@@ -319,7 +319,7 @@ test('generateProceduralMap: generates different maps with different seeds', () 
   const map2 = generateProceduralMap(2);
 
   // Maps should be different (at least one entity position differs)
-  const sameHerd = map1.herd.x === map2.herd.x && map1.herd.y === map2.herd.y;
+  const sameHerd = map1.herds[0].x === map2.herds[0].x && map1.herds[0].y === map2.herds[0].y;
   const samePen = map1.pen.x === map2.pen.x && map1.pen.y === map2.pen.y;
 
   assert.equal(sameHerd && samePen, false, 'Different seeds should generate different maps');
@@ -329,8 +329,8 @@ test('generateProceduralMap: same seed generates same map', () => {
   const map1 = generateProceduralMap(42);
   const map2 = generateProceduralMap(42);
 
-  assert.equal(map1.herd.x, map2.herd.x);
-  assert.equal(map1.herd.y, map2.herd.y);
+  assert.equal(map1.herds[0].x, map2.herds[0].x);
+  assert.equal(map1.herds[0].y, map2.herds[0].y);
   assert.equal(map1.pen.x, map2.pen.x);
   assert.equal(map1.pen.y, map2.pen.y);
   assert.equal(map1.pen.openSide, map2.pen.openSide);
@@ -347,7 +347,7 @@ test('generateProceduralMap: multiple generations all valid', () => {
 
 test('generateProceduralMap: herd and pen are spatially separated', () => {
   const state = generateProceduralMap(99);
-  const herdToPen = dist(state.herd, state.pen);
+  const herdToPen = dist(state.herds[0], state.pen);
 
   // Herd should be at least a few inches from pen
   assert.ok(herdToPen > 5, `Herd too close to pen: ${herdToPen.toFixed(1)}"`);

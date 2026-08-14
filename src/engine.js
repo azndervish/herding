@@ -134,10 +134,11 @@ function angleToOffset(angleDeg, inches) {
 }
 
 function cloneState(s) {
+  const herds = Array.isArray(s.herds) ? s.herds : (s.herd ? [s.herd] : []);
   return {
     ...s,
     dog: { ...s.dog },
-    herd: { ...s.herd },
+    herds: herds.map(h => ({ ...h })),
     looseAnimals: s.looseAnimals.map(a => ({ ...a })),
     pen: { ...s.pen },
     events: [...s.events],
@@ -170,7 +171,7 @@ function _checkOob(tag, e, boardSize) {
 
 /** Checks every entity in state for boundary violations. */
 function _checkStateOob(tag, s) {
-  _checkOob(tag, s.herd, s.boardSize);
+  s.herds.forEach(herd => _checkOob(tag, herd, s.boardSize));
   _checkOob(tag, s.dog,  s.boardSize);
   s.looseAnimals.forEach(la => _checkOob(tag, la, s.boardSize));
 }
@@ -245,11 +246,11 @@ function correctImpassablePoint(x, y, terrain) {
  * @param {boolean} checkEntityCollisions - if false, only check walls/terrain (for dumb_animals phase)
  */
 function resolveMovement(animal, targetX, targetY, state, escapedIds = new Set(), checkEntityCollisions = true) {
-  const { pen, terrain = [], dog, herd, looseAnimals } = state;
+  const { pen, terrain = [], dog, herds = [], looseAnimals } = state;
   const walls = getPenWalls(pen);
   const others = !checkEntityCollisions ? [] : animal.type === 'loose'
     ? [dog, ...looseAnimals].filter(e => e.id !== animal.id && !escapedIds.has(e.id))
-    : [dog, herd, ...looseAnimals].filter(e => e.id !== animal.id && !escapedIds.has(e.id));
+    : [dog, ...herds, ...looseAnimals].filter(e => e.id !== animal.id && !escapedIds.has(e.id));
   const pathSteps = 1000;
   let pathLimit = 1;
   let pathObstacle = null;
@@ -336,12 +337,17 @@ function phaseDumbAnimals(state) {
   const { rng, boardSize } = s;
   const events = [];
 
-  console.log(`[dumbAnimals T${s.turn}] entry — herd ${_pos(s.herd)}, dog ${_pos(s.dog)}, loose: ${s.looseAnimals.length}`);
+  console.log(`[dumbAnimals T${s.turn}] entry — herds ${s.herds.map(_pos).join(', ')}, dog ${_pos(s.dog)}, loose: ${s.looseAnimals.length}`);
   _checkStateOob('dumbAnimals:entry', s);
 
-  const animals = [s.herd, ...s.looseAnimals].sort(
-    (a, b) => dist(b, s.dog) - dist(a, s.dog)
-  );
+  // Herds move first in their configured order. Loose animals retain the
+  // existing furthest-from-dog ordering after all herds have moved.
+  const animals = [...s.herds, ...s.looseAnimals].sort((a, b) => {
+    if (a.type === 'herd' && b.type !== 'herd') return -1;
+    if (a.type !== 'herd' && b.type === 'herd') return 1;
+    if (a.type === 'herd' && b.type === 'herd') return s.herds.indexOf(a) - s.herds.indexOf(b);
+    return dist(b, s.dog) - dist(a, s.dog);
+  });
   for (const animal of animals) {
     let roll = rollDie(6, rng);
     const angle = rng() * 360;
@@ -385,8 +391,9 @@ function phaseDumbAnimals(state) {
   }
   const rejoined = [];
   for (const la of s.looseAnimals) {
-    if (!la._escaped && entitiesContact(la, s.herd)) {
-      console.log(`[dumbAnimals T${s.turn}] ${la.id} rejoined herd (dist=${dist(la, s.herd).toFixed(2)}")`);
+    const herd = s.herds.find(h => !h._entered && entitiesContact(la, h));
+    if (!la._escaped && herd) {
+      console.log(`[dumbAnimals T${s.turn}] ${la.id} rejoined ${herd.id} (dist=${dist(la, herd).toFixed(2)}")`);
       rejoined.push(la.id); events.push(`${la.id} rejoined the herd!`);
     }
   }
@@ -394,7 +401,7 @@ function phaseDumbAnimals(state) {
   s.events = [...s.events, ...events];
   s.phase = 'come_by';
 
-  console.log(`[dumbAnimals T${s.turn}] exit  — herd ${_pos(s.herd)}, loose: ${s.looseAnimals.length}, escaped: ${s.escapedCount || 0}`);
+  console.log(`[dumbAnimals T${s.turn}] exit  — herds ${s.herds.map(_pos).join(', ')}, loose: ${s.looseAnimals.length}, escaped: ${s.escapedCount || 0}`);
   _checkStateOob('dumbAnimals:exit', s);
   return s;
 }
@@ -445,40 +452,44 @@ function phaseLooseAnimal(state) {
   const { rng } = s;
   const events = [];
 
-  const dogToHerd = dist(s.dog, s.herd);
-  console.log(`[looseAnimal T${s.turn}] entry — dog ${_pos(s.dog)}, herd ${_pos(s.herd)}, dog↔herd=${dogToHerd.toFixed(2)}"`);
+  console.log(`[looseAnimal T${s.turn}] entry — herds ${s.herds.map(_pos).join(', ')}, dog ${_pos(s.dog)}`);
   _checkStateOob('looseAnimal:entry', s);
 
-  if (dogToHerd <= DOG_SPOOK_RANGE) {
-    const roll = rollDie(8, rng);
-    console.log(`[looseAnimal T${s.turn}] within spook range — D8 roll: ${roll} vs distance ${dogToHerd.toFixed(2)}"`);
-    events.push(`Loose Animal: Dog ${dogToHerd.toFixed(1)}" from herd. Rolled D8: ${roll}.`);
-    if (roll >= dogToHerd) {
-      const spawnDist = rollDie(6, rng);
-      const angle = rng() * 360;
-      const { dx, dy } = angleToOffset(angle, spawnDist);
-      const newId = `loose_${s.looseAnimals.length + 1}_t${s.turn}`;
-      let spawnX = s.herd.x + dx;
-      let spawnY = s.herd.y + dy;
+  for (const herd of s.herds) {
+    const dogToHerd = dist(s.dog, herd);
+    if (dogToHerd <= DOG_SPOOK_RANGE) {
+      const roll = rollDie(8, rng);
+      console.log(`[looseAnimal T${s.turn}] ${herd.id} within spook range — D8 roll: ${roll} vs distance ${dogToHerd.toFixed(2)}"`);
+      events.push(`Loose Animal: Dog ${dogToHerd.toFixed(1)}" from ${herd.id}. Rolled D8: ${roll}.`);
+      if (roll >= dogToHerd) {
+        const spawnDist = rollDie(6, rng);
+        const angle = rng() * 360;
+        const suffix = s.herds.length > 1 ? `_${herd.id}` : '';
+        const newId = `loose_${s.looseAnimals.length + 1}_t${s.turn}${suffix}`;
+        const { dx, dy } = angleToOffset(angle, spawnDist);
+        let spawnX = herd.x + dx;
+        let spawnY = herd.y + dy;
 
-      // Check if spawn position is inside impassable terrain and correct if needed
-      const correction = correctImpassablePoint(spawnX, spawnY, s.terrain || []);
-      if (correction.corrected) {
-        console.log(`[looseAnimal T${s.turn}] spawn position (${spawnX.toFixed(2)}, ${spawnY.toFixed(2)}) inside terrain — corrected to (${correction.x.toFixed(2)}, ${correction.y.toFixed(2)})`);
-        spawnX = correction.x;
-        spawnY = correction.y;
+        // Check if spawn position is inside impassable terrain and correct if needed
+        const correction = correctImpassablePoint(spawnX, spawnY, s.terrain || []);
+        if (correction.corrected) {
+          console.log(`[looseAnimal T${s.turn}] spawn position (${spawnX.toFixed(2)}, ${spawnY.toFixed(2)}) inside terrain — corrected to (${correction.x.toFixed(2)}, ${correction.y.toFixed(2)})`);
+          spawnX = correction.x;
+          spawnY = correction.y;
+        }
+
+        const la = { id: newId, type: 'loose', radius: TOKEN_RADIUS, x: spawnX, y: spawnY };
+        console.log(`[looseAnimal T${s.turn}] spawned ${newId} from ${herd.id} — ${spawnDist}" @ ${angle.toFixed(0)}° → ${_pos(la)}`);
+        _checkOob(`looseAnimal:spawn | ${newId}`, la, s.boardSize);
+        s.looseAnimals.push(la);
+        events.push(`Loose Animal: Animal spooked by ${herd.id}! ${newId} placed ${spawnDist}" from herd.`);
+      } else {
+        const label = s.herds.length === 1 ? 'Herd' : herd.id;
+        events.push(`Loose Animal: ${label} holds — roll ${roll} < distance ${dogToHerd.toFixed(1)}".`);
       }
-
-      const la = { id: newId, type: 'loose', radius: TOKEN_RADIUS, x: spawnX, y: spawnY };
-      console.log(`[looseAnimal T${s.turn}] spawned ${newId} — ${spawnDist}" @ ${angle.toFixed(0)}° → ${_pos(la)}`);
-      _checkOob(`looseAnimal:spawn | ${newId}`, la, s.boardSize);
-      s.looseAnimals.push(la);
-      events.push(`Loose Animal: Animal spooked! ${newId} placed ${spawnDist}" from herd.`);
     } else {
-      events.push(`Loose Animal: Herd holds — roll ${roll} < distance ${dogToHerd.toFixed(1)}".`);
+      events.push(`Loose Animal: Dog ${dogToHerd.toFixed(1)}" from ${herd.id} — too far to spook.`);
     }
-  } else {
-    events.push(`Loose Animal: Dog ${dogToHerd.toFixed(1)}" away — too far to spook.`);
   }
   s.events = [...s.events, ...events]; s.phase = 'move_herd';
 
@@ -491,14 +502,27 @@ function phaseMoveHerd(state) {
   const { boardSize } = s;
   const events = [];
 
-  console.log(`[moveHerd T${s.turn}] entry — herd ${_pos(s.herd)}, dog ${_pos(s.dog)}, loose: ${s.looseAnimals.length}`);
+  console.log(`[moveHerd T${s.turn}] entry — herds ${s.herds.map(_pos).join(', ')}, dog ${_pos(s.dog)}, loose: ${s.looseAnimals.length}`);
   _checkStateOob('moveHerd:entry', s);
 
-  const animals = [s.herd, ...s.looseAnimals].sort((a,b) => dist(b,s.dog) - dist(a,s.dog));
+  // Herds move independently in array order. Loose animals then retain the
+  // existing furthest-from-dog ordering.
+  const animals = [...s.herds, ...s.looseAnimals].sort((a, b) => {
+    if (a.type === 'herd' && b.type !== 'herd') return -1;
+    if (a.type !== 'herd' && b.type === 'herd') return 1;
+    if (a.type === 'herd' && b.type === 'herd') return s.herds.indexOf(a) - s.herds.indexOf(b);
+    return dist(b, s.dog) - dist(a, s.dog);
+  });
   const escapedIds = new Set();
 
   for (const animal of animals) {
     if (escapedIds.has(animal.id)) continue;
+    if (animal.type === 'herd' && pointInRect(animal.x, animal.y, s.pen)) {
+      s.herds = s.herds.filter(herd => herd.id !== animal.id);
+      events.push(`Move Herd: ${animal.id} entered the pen!`);
+      console.log(`[moveHerd T${s.turn}] ${animal.id} was already in the pen and was removed`);
+      continue;
+    }
     const d = dist(animal, s.dog);
     if (d >= HERD_CLEARANCE) {
       console.log(`[moveHerd T${s.turn}] ${animal.id} already ${d.toFixed(2)}" from dog — no push needed`);
@@ -576,12 +600,21 @@ function phaseMoveHerd(state) {
     animal.x = newX;
     animal.y = newY;
 
-    // Check if loose animal rejoined herd
+    // Remove each herd as soon as its movement places its center in the pen.
+    // Later herds and loose animals in this same phase only see active herds.
+    if (animal.type === 'herd' && pointInRect(animal.x, animal.y, s.pen)) {
+      s.herds = s.herds.filter(herd => herd.id !== animal.id);
+      events.push(`Move Herd: ${animal.id} entered the pen!`);
+      console.log(`[moveHerd T${s.turn}] ${animal.id} reached pen and was removed`);
+      continue;
+    }
+
+    // Check if loose animal rejoined any active herd
     if (animal.type === 'loose') {
-      const contactsHerd = entitiesContact(animal, s.herd) ||
-        (result.blocked && dist(animal, s.herd) <= animal.radius + s.herd.radius + 0.05);
-      if (contactsHerd) {
-        console.log(`[moveHerd T${s.turn}] ${animal.id} rejoined herd at (${newX.toFixed(2)},${newY.toFixed(2)})`);
+      const rejoinedHerd = s.herds.find(herd => entitiesContact(animal, herd) ||
+        (result.blocked && dist(animal, herd) <= animal.radius + herd.radius + 0.05));
+      if (rejoinedHerd) {
+        console.log(`[moveHerd T${s.turn}] ${animal.id} rejoined ${rejoinedHerd.id} at (${newX.toFixed(2)},${newY.toFixed(2)})`);
         escapedIds.add(animal.id);
         events.push(`Move Herd: ${animal.id} rejoined the herd!`);
         continue;
@@ -596,15 +629,14 @@ function phaseMoveHerd(state) {
   s.looseAnimals = s.looseAnimals.filter(a => !escapedIds.has(a.id) && !a._escaped);
   s.events = [...s.events, ...events];
 
-  // Victory condition: herd center must be inside the pen
-  if (pointInRect(s.herd.x, s.herd.y, s.pen)) {
-    console.log(`[moveHerd T${s.turn}] herd center reached pen — FINISHED`);
-    s.events.push("🐑 The herd is in the pen! That'll do!");
+  if (s.herds.length === 0) {
+    console.log(`[moveHerd T${s.turn}] all herds reached pen — FINISHED`);
+    s.events.push("🐑 All the herds are in the pen! That'll do!");
     s.phase = 'finished'; return s;
   }
   s.turn = (s.turn || 1) + 1; s.phase = 'dumb_animals';
 
-  console.log(`[moveHerd T${s.turn - 1}] exit  — herd ${_pos(s.herd)}, loose: ${s.looseAnimals.length}, escaped: ${s.escapedCount || 0}`);
+  console.log(`[moveHerd T${s.turn - 1}] exit  — herds ${s.herds.map(_pos).join(', ')}, loose: ${s.looseAnimals.length}, escaped: ${s.escapedCount || 0}`);
   _checkStateOob('moveHerd:exit', s);
   return s;
 }
@@ -755,32 +787,35 @@ function validatePenOpening(state) {
  */
 function validateHerdStart(state) {
   const errors = [];
-  const { herd, pen, boardSize } = state;
+  const herds = Array.isArray(state.herds) ? state.herds : (state.herd ? [state.herd] : []);
+  const { pen, boardSize } = state;
 
-  // Rule 1: Herd must be outside dog zone
-  const dogZoneRight = DOG_ZONE_WIDTH + herd.radius;
-  if (herd.x <= dogZoneRight) {
-    errors.push(`Herd at x=${herd.x.toFixed(1)}" overlaps dog zone (must be > ${dogZoneRight.toFixed(1)}")`);
-  }
+  herds.forEach(herd => {
+    // Rule 1: Herd must be outside dog zone
+    const dogZoneRight = DOG_ZONE_WIDTH + herd.radius;
+    if (herd.x <= dogZoneRight) {
+      errors.push(`Herd "${herd.id}" at x=${herd.x.toFixed(1)}" overlaps dog zone (must be > ${dogZoneRight.toFixed(1)}")`);
+    }
 
-  // Rule 2: Herd must be outside pen
-  if (circleRectContact(herd, pen)) {
-    errors.push(`Herd at (${herd.x.toFixed(1)}, ${herd.y.toFixed(1)}) overlaps pen`);
-  }
+    // Rule 2: Herd must be outside pen
+    if (circleRectContact(herd, pen)) {
+      errors.push(`Herd "${herd.id}" at (${herd.x.toFixed(1)}, ${herd.y.toFixed(1)}) overlaps pen`);
+    }
 
-  // Rule 3: Herd must be fully inside board
-  if (herd.x - herd.radius < 0) {
-    errors.push(`Herd extends past left edge (x=${herd.x.toFixed(1)}", radius=${herd.radius})`);
-  }
-  if (herd.x + herd.radius > boardSize) {
-    errors.push(`Herd extends past right edge (x=${herd.x.toFixed(1)}", radius=${herd.radius})`);
-  }
-  if (herd.y - herd.radius < 0) {
-    errors.push(`Herd extends past top edge (y=${herd.y.toFixed(1)}", radius=${herd.radius})`);
-  }
-  if (herd.y + herd.radius > boardSize) {
-    errors.push(`Herd extends past bottom edge (y=${herd.y.toFixed(1)}", radius=${herd.radius})`);
-  }
+    // Rule 3: Herd must be fully inside board
+    if (herd.x - herd.radius < 0) {
+      errors.push(`Herd "${herd.id}" extends past left edge (x=${herd.x.toFixed(1)}", radius=${herd.radius})`);
+    }
+    if (herd.x + herd.radius > boardSize) {
+      errors.push(`Herd "${herd.id}" extends past right edge (x=${herd.x.toFixed(1)}", radius=${herd.radius})`);
+    }
+    if (herd.y - herd.radius < 0) {
+      errors.push(`Herd "${herd.id}" extends past top edge (y=${herd.y.toFixed(1)}", radius=${herd.radius})`);
+    }
+    if (herd.y + herd.radius > boardSize) {
+      errors.push(`Herd "${herd.id}" extends past bottom edge (y=${herd.y.toFixed(1)}", radius=${herd.radius})`);
+    }
+  });
 
   return { valid: errors.length === 0, errors };
 }
@@ -812,7 +847,7 @@ function validateMap(state) {
 const WALK_UP = {
   boardSize: 24,
   dog:  { id: 'dog',  type: 'dog',  x: 1,  y: 12, radius: TOKEN_RADIUS, facing: 'right' },  // Default position (will be overridden by deployment)
-  herd: { id: 'herd', type: 'herd', x: 6,  y: 10, radius: HERD_RADIUS  },
+    herds: [{ id: 'herd', type: 'herd', x: 6,  y: 10, radius: HERD_RADIUS  }],
   pen:  { id: 'pen',  type: 'pen',  x: 18, y: 10, w: 8, h: 6, openSide: 'left' },
   looseAnimals: [],
   escapedCount: 0,
@@ -826,7 +861,7 @@ const WALK_UP = {
 const ROTTEN_BRIDGE = {
   boardSize: 24,
   dog:  { id: 'dog',  type: 'dog',  x: 1,  y: 12, radius: TOKEN_RADIUS, facing: 'right' },
-  herd: { id: 'herd', type: 'herd', x: 6,  y: 12, radius: HERD_RADIUS  },
+    herds: [{ id: 'herd', type: 'herd', x: 6,  y: 12, radius: HERD_RADIUS  }],
   pen:  { id: 'pen',  type: 'pen',  x: 22 - 4, y: 4, w: 8, h: 8, openSide: 'bottom' }, // 2" from right edge, 0" from top
   looseAnimals: [],
   escapedCount: 0,
@@ -843,7 +878,7 @@ const ROTTEN_BRIDGE = {
 const DEAD_MOUNT = {
   boardSize: 24,
   dog:  { id: 'dog',  type: 'dog',  x: 1,  y: 12, radius: TOKEN_RADIUS, facing: 'right' },
-  herd: { id: 'herd', type: 'herd', x: 10, y: 21, radius: HERD_RADIUS  }, // 10" from left (24-10=14" from right), 3" from bottom (24-3=21)
+    herds: [{ id: 'herd', type: 'herd', x: 10, y: 21, radius: HERD_RADIUS  }], // 10" from left (24-10=14" from right), 3" from bottom (24-3=21)
   pen:  { id: 'pen',  type: 'pen',  x: 20, y: 4, w: 8, h: 8, openSide: 'bottom' }, // Top right corner: center at (20,4), opens bottom
   looseAnimals: [],
   escapedCount: 0,
@@ -859,7 +894,7 @@ const DEAD_MOUNT = {
 const BOGS_EDGE = {
   boardSize: 24,
   dog:  { id: 'dog',  type: 'dog',  x: 1,  y: 12, radius: TOKEN_RADIUS, facing: 'right' },
-  herd: { id: 'herd', type: 'herd', x: 10, y: 8,  radius: HERD_RADIUS  }, // 10" from left, 8" from top
+    herds: [{ id: 'herd', type: 'herd', x: 10, y: 8,  radius: HERD_RADIUS  }], // 10" from left, 8" from top
   pen:  { id: 'pen',  type: 'pen',  x: 10, y: 18, w: 8, h: 8, openSide: 'right' }, // 8" from right (24-8=16, center at 12), 2" from bottom (24-2=22, center at 22), 8"x4", opens right
   looseAnimals: [],
   escapedCount: 0,
@@ -1105,7 +1140,7 @@ function generateProceduralMap(seed = Date.now()) {
   const state = {
     boardSize,
     dog: { id: 'dog', type: 'dog', x: 1, y: 12, radius: TOKEN_RADIUS, facing: 'right' },
-    herd,
+    herds: [herd],
     pen,
     looseAnimals: [],
     escapedCount: 0,

@@ -10,7 +10,7 @@ Control a herding dog to move animals toward the pen. Each turn:
 3. **Loose Animal** — Risk of animals breaking away if too close
 4. **Move Herd** — Push animals away from dog (10" clearance)
 
-**Victory:** Get the herd's center point inside the pen  
+**Victory:** Get every herd's center point inside the pen. Herds are removed as they enter; loose animals may rejoin any active herd.
 **Challenge:** Keep animals from escaping off the board edge
 
 ## 🚀 Quick Start
