@@ -978,7 +978,7 @@ describe('Terrain collision in phaseComeBy', () => {
     assert.ok(!next.events.some(e => e.includes('terrain')), 'should not mention terrain');
   });
 
-  it('allows radius overlap at a terrain corner when the center path is clear', () => {
+  it('allows radius overlap along the path when the final token fits', () => {
     const terrain = [{ id: 'water', type: 'impassable', x: 10, y: 10, w: 2, h: 2 }];
     const s = makeState({
       phase: 'come_by',
@@ -991,6 +991,9 @@ describe('Terrain collision in phaseComeBy', () => {
 
     assert.equal(next.dog.x, 12);
     assert.equal(next.dog.y, 8.5);
+    // The final position is clear of the terrain's top-right corner (11, 9).
+    assert.ok(Math.hypot(next.dog.x - 11, next.dog.y - 9) >= TOKEN_RADIUS);
+    assert.ok(!next.events.some(e => e.includes('impassable terrain')));
   });
 
   it('blocks a pen fence crossing that falls between samples', () => {
@@ -1036,7 +1039,8 @@ describe('Terrain collision in phaseMoveHerd', () => {
 
     // Dog is 4" from herd, needs 10" clearance → herd pushed 6" east, hits terrain at x=10
     assert.ok(next.herd.x > 6, 'herd should be pushed east');
-    assert.ok(next.herd.x < 10, 'herd center should stop before terrain');
+    assert.ok(next.herd.x + HERD_RADIUS <= 10.01,
+      `herd overlaps terrain: right=${(next.herd.x + HERD_RADIUS).toFixed(2)}, terrain=${10}`);
     assert.ok(next.events.some(e => e.includes('impassable terrain')), 'should log terrain collision');
   });
 
@@ -1054,6 +1058,23 @@ describe('Terrain collision in phaseMoveHerd', () => {
 
     assert.ok(next.looseAnimals[0].x > 13, 'loose animal should be pushed east');
     assert.ok(next.looseAnimals[0].x < 15, 'loose animal center should stop before terrain');
+  });
+
+  it('herd stops with its full token clear of a fence', () => {
+    const s = makeState({
+      phase: 'move_herd',
+      dog: { id: 'dog', type: 'dog', x: 2, y: 12, radius: TOKEN_RADIUS },
+      herd: { id: 'herd', type: 'herd', x: 6, y: 12, radius: HERD_RADIUS },
+      pen: { id: 'pen', type: 'pen', x: 10, y: 12, w: 2, h: 8, openSide: 'left' },
+    });
+
+    const next = phaseMoveHerd(s);
+    const rightFence = 11;
+
+    assert.ok(next.herd.x > 6, 'herd should be pushed toward the fence');
+    assert.ok(next.herd.x + HERD_RADIUS <= rightFence + 0.01,
+      `herd overlaps fence: right=${(next.herd.x + HERD_RADIUS).toFixed(2)}, fence=${rightFence}`);
+    assert.ok(next.events.some(e => e.includes('pen wall')));
   });
 });
 

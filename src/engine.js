@@ -105,6 +105,27 @@ function segmentsIntersect(a, b, x1, y1, x2, y2) {
   return false;
 }
 
+function pointSegmentDistanceSquared(point, x1, y1, x2, y2) {
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  if (dx === 0 && dy === 0) {
+    return (point.x - x1) ** 2 + (point.y - y1) ** 2;
+  }
+
+  const t = Math.max(0, Math.min(1,
+    ((point.x - x1) * dx + (point.y - y1) * dy) / (dx * dx + dy * dy)
+  ));
+  const closestX = x1 + t * dx;
+  const closestY = y1 + t * dy;
+  return (point.x - closestX) ** 2 + (point.y - closestY) ** 2;
+}
+
+function circleSegmentContact(circle, segment) {
+  return pointSegmentDistanceSquared(
+    circle, segment[0], segment[1], segment[2], segment[3]
+  ) <= circle.radius * circle.radius;
+}
+
 function rollDie(faces, rng) { return Math.floor(rng() * faces) + 1; }
 
 function angleToOffset(angleDeg, inches) {
@@ -229,12 +250,16 @@ function resolveMovement(animal, targetX, targetY, state, escapedIds = new Set()
   const others = !checkEntityCollisions ? [] : animal.type === 'loose'
     ? [dog, ...looseAnimals].filter(e => e.id !== animal.id && !escapedIds.has(e.id))
     : [dog, herd, ...looseAnimals].filter(e => e.id !== animal.id && !escapedIds.has(e.id));
-  let lastValid = { x: animal.x, y: animal.y };
+  const pathSteps = 1000;
+  let pathLimit = 1;
+  let pathObstacle = null;
 
-  // Ten equal steps, checked from the origin toward the requested destination.
-  // Area terrain uses the token center only; fences use center-path crossing.
-  for (let i = 1; i <= 10; i++) {
-    const t = i / 10;
+  // The path is legal based on the token center. This deliberately does not
+  // use circle-vs-rectangle or circle-vs-wall checks: those are final-position
+  // checks below. A fine-grained sweep prevents a center-path crossing from
+  // falling between samples.
+  for (let i = 1; i <= pathSteps; i++) {
+    const t = i / pathSteps;
     const candidate = {
       x: animal.x + (targetX - animal.x) * t,
       y: animal.y + (targetY - animal.y) * t,
@@ -242,19 +267,67 @@ function resolveMovement(animal, targetX, targetY, state, escapedIds = new Set()
     };
 
     if (isInsideImpassableTerrain(candidate.x, candidate.y, terrain)) {
-      return { ...lastValid, blocked: false, obstacle: 'impassable terrain' };
+      pathLimit = (i - 1) / pathSteps;
+      pathObstacle = 'impassable terrain';
+      break;
     }
-    if (walls.some(wall => segmentsIntersect(lastValid, candidate, wall[0], wall[1], wall[2], wall[3]))) {
-      return { ...lastValid, blocked: false, obstacle: 'pen wall' };
+    if (walls.some(wall => segmentsIntersect(
+      { x: animal.x, y: animal.y }, candidate,
+      wall[0], wall[1], wall[2], wall[3]
+    ))) {
+      pathLimit = (i - 1) / pathSteps;
+      pathObstacle = 'pen wall';
+      break;
     }
     const hitEntity = others.find(other => entitiesContact(candidate, other));
     if (hitEntity) {
-      return { ...lastValid, blocked: true, obstacle: hitEntity.id };
+      pathLimit = (i - 1) / pathSteps;
+      pathObstacle = hitEntity.id;
+      break;
     }
-    lastValid = { x: candidate.x, y: candidate.y };
   }
 
-  return { ...lastValid, blocked: false, obstacle: null };
+  const fullPlacementObstacle = (position) => {
+    const circle = { ...position, radius: animal.radius };
+    if (terrain.some(t => t.type === 'impassable' && circleRectContact(circle, t))) {
+      return 'impassable terrain';
+    }
+    if (walls.some(wall => circleSegmentContact(circle, wall))) {
+      return 'pen wall';
+    }
+    const hitEntity = others.find(other => entitiesContact(circle, other));
+    return hitEntity ? hitEntity.id : null;
+  };
+
+  // Find the furthest point that fits the complete token. This is a backward
+  // search from the requested destination (or the center-path limit), so a
+  // token stops with its edge touching an obstacle instead of overlapping it.
+  const searchSteps = 1000;
+  let finalPosition = null;
+  for (let i = 0; i <= searchSteps; i++) {
+    const t = pathLimit * (1 - i / searchSteps);
+    const position = {
+      x: animal.x + (targetX - animal.x) * t,
+      y: animal.y + (targetY - animal.y) * t,
+    };
+    if (!fullPlacementObstacle(position)) {
+      finalPosition = position;
+      break;
+    }
+  }
+
+  // If the starting position is already invalid, retain it rather than
+  // teleporting the entity. Normal movement will resolve it on a later turn.
+  if (!finalPosition) {
+    finalPosition = { x: animal.x, y: animal.y };
+  }
+
+  const finalObstacle = fullPlacementObstacle(finalPosition);
+  return {
+    ...finalPosition,
+    blocked: Boolean(finalObstacle && !['impassable terrain', 'pen wall'].includes(finalObstacle)),
+    obstacle: finalObstacle || pathObstacle,
+  };
 }
 
 
