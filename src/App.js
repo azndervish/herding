@@ -6,6 +6,8 @@ import {
   dist, processTurn, SCENARIOS,
 } from "./engine.js";
 
+const BUILD_HASH = process.env.REACT_APP_BUILD_HASH || 'local';
+
 // BOARD SVG — pure rendering
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -575,6 +577,17 @@ function MapSelector({ onSelect }) {
             }}>›</div>
           </button>
         ))}
+      </div>
+
+      <div style={{
+        marginTop: 'auto',
+        padding: '12px 16px 16px',
+        color: '#8a7a5a',
+        fontSize: 9,
+        letterSpacing: '0.08em',
+        textAlign: 'center',
+      }}>
+        Build {BUILD_HASH}
       </div>
     </div>
   );
