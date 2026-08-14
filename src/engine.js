@@ -858,6 +858,14 @@ const WALK_UP = {
   rng: Math.random,
 };
 
+const WALK_UP_2 = {
+  ...WALK_UP,
+  herds: [
+    { ...WALK_UP.herds[0] },
+    { id: 'herd_2', type: 'herd', x: 6, y: 16, radius: HERD_RADIUS },
+  ],
+};
+
 const ROTTEN_BRIDGE = {
   boardSize: 24,
   dog:  { id: 'dog',  type: 'dog',  x: 1,  y: 12, radius: TOKEN_RADIUS, facing: 'right' },
@@ -1166,6 +1174,7 @@ const PROCEDURAL = generateProceduralMap();
 
 const SCENARIOS = [
   { id: 'walk_up', name: 'Walk Up', state: WALK_UP },
+  { id: 'walk_up_2', name: 'Walk Up 2', state: WALK_UP_2 },
   { id: 'rotten_bridge', name: 'Rotten Bridge', state: ROTTEN_BRIDGE },
   { id: 'dead_mount', name: 'Dead Mount', state: DEAD_MOUNT },
   { id: 'bogs_edge', name: "Bog's Edge", state: BOGS_EDGE },
@@ -1181,5 +1190,5 @@ export {
   processTurn,
   validateDogZone, validatePenOpening, validateHerdStart, validateMap,
   createSeededRNG, generateProceduralMap,
-  WALK_UP, ROTTEN_BRIDGE, DEAD_MOUNT, BOGS_EDGE, PROCEDURAL, SCENARIOS,
+  WALK_UP, WALK_UP_2, ROTTEN_BRIDGE, DEAD_MOUNT, BOGS_EDGE, PROCEDURAL, SCENARIOS,
 };

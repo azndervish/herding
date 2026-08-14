@@ -31,6 +31,7 @@ Open [http://localhost:3000](http://localhost:3000) to play.
 ## 🗺️ Scenarios
 
 - **Walk Up** — Basic scenario with clear path to pen
+- **Walk Up 2** — Walk Up layout with two herds
 - **Rotten Bridge** — Two impassable rivers with 8" crossing gap
 - **Dead Mount** — Right half is labouring terrain (halves movement)
 - **Bog's Edge** — Murky water pulls animals toward dog (antithetical terrain)

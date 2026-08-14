@@ -40,6 +40,7 @@ import {
   phaseMoveHerd,
   processTurn,
   WALK_UP,
+  WALK_UP_2,
   ROTTEN_BRIDGE,
 } from './engine.js';
 
@@ -957,6 +958,18 @@ describe('WALK_UP scenario', () => {
     // The game either finished or ran stably for 50 turns without throwing
     assert.ok(s.phase === 'finished' || turns === 50);
     assert.ok(typeof s.escapedCount === 'number');
+  });
+});
+
+describe('WALK_UP_2 scenario', () => {
+  it('uses the Walk Up layout with two distinct herds', () => {
+    assert.equal(WALK_UP_2.pen.x, WALK_UP.pen.x);
+    assert.equal(WALK_UP_2.pen.y, WALK_UP.pen.y);
+    assert.equal(WALK_UP_2.terrain.length, 0);
+    assert.equal(WALK_UP_2.herds.length, 2);
+    assert.deepEqual(WALK_UP_2.herds[0], WALK_UP.herds[0]);
+    assert.notEqual(WALK_UP_2.herds[0].id, WALK_UP_2.herds[1].id);
+    assert.ok(dist(WALK_UP_2.herds[0], WALK_UP_2.herds[1]) > HERD_RADIUS * 2);
   });
 });
 

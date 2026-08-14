@@ -248,6 +248,7 @@ Scenarios are defined as plain objects and registered in the `SCENARIOS` array:
 ```js
 const SCENARIOS = [
   { id: 'walk_up', name: 'Walk Up', state: WALK_UP },
+  { id: 'walk_up_2', name: 'Walk Up 2', state: WALK_UP_2 },
 ];
 ```
 
@@ -255,6 +256,7 @@ Each scenario `state` object follows the full game state shape (minus `rng`, whi
 
 **Current scenarios:**
 - **Walk Up** — dog starts bottom-left, herd near centre-left, pen (8"×6") on the right with solid walls on top/right/bottom and open on the left side for entry.
+- **Walk Up 2** — Walk Up layout with a second herd near the lower-left centre.
 - **Rotten Bridge** — pen in top right corner (opens bottom), two impassable river sections create an 8" gap in the middle for crossing.
 - **Dead Mount** — pen in top right corner (opens bottom), entire right half of the board is labouring terrain. Herd starts 10" from left edge, 3" from bottom.
 - **Bog's Edge** — pen near bottom center (opens right), 8" wide murky water (antithetical terrain) runs along right side from x=16 to x=24. Herd starts 10" from left, 8" from top.
